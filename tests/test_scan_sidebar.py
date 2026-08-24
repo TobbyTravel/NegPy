@@ -522,3 +522,44 @@ def test_lockout_scan_error_shows_message_box(monkeypatch) -> None:
 
     assert f"Error: {msg}" in sidebar.status_label.text()
     assert popped == [("Scan failed", msg)]
+
+
+def test_se_device_shows_passes_spin_and_gates_on_me() -> None:
+    sidebar, _ = _sidebar(SE_DEVICE, settings={"backend": "plustek"})
+    # ME-capable device: Passes spin is visible but disabled until ME is checked.
+    assert sidebar.passes_spin.isVisibleTo(sidebar) is True
+    assert sidebar.passes_spin.isEnabled() is False
+    sidebar.me_check.setChecked(True)
+    assert sidebar.passes_spin.isEnabled() is True
+    sidebar.me_check.setChecked(False)
+    assert sidebar.passes_spin.isEnabled() is False
+
+
+def test_minimal_device_hides_passes_spin() -> None:
+    sidebar, _ = _sidebar(MINIMAL_DEVICE)
+    assert sidebar.passes_spin.isVisibleTo(sidebar) is False
+
+
+def test_passes_spin_persists_multi_pass() -> None:
+    sidebar, _ = _sidebar(SE_DEVICE, settings={"backend": "plustek"})
+    sidebar.passes_spin.setValue(6)  # fires _update_settings_from_ui
+    assert sidebar._settings.multi_pass == 6
+
+
+def test_scan_params_carry_passes_when_me_enabled() -> None:
+    sidebar, controller = _sidebar(SE_DEVICE, settings={"backend": "plustek", "multi_pass": 4})
+    sidebar.folder_edit.setText("/tmp/negpy-scan-out")
+    sidebar.me_check.setChecked(True)
+    sidebar._on_scan()
+    _kind, req = controller.started[0]
+    assert req.params.passes == 4
+    assert req.params.multi_exposure is True
+
+
+def test_scan_params_pass_none_when_me_disabled() -> None:
+    sidebar, controller = _sidebar(SE_DEVICE, settings={"backend": "plustek", "multi_pass": 4})
+    sidebar.folder_edit.setText("/tmp/negpy-scan-out")
+    sidebar._on_scan()
+    _kind, req = controller.started[0]
+    assert req.params.passes is None
+    assert req.params.multi_exposure is False

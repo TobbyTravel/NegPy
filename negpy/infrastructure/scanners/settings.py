@@ -16,6 +16,8 @@ class ScannerSettings:
     depth: int = 16
     capture_ir: bool = False
     multi_exposure: bool = False
+    # Multi-pass count (pyopticfilm multi-pass release). 2 = classic short/long pair.
+    multi_pass: int = 2
     autofocus: bool = True
     auto_exposure: bool = False
     # Hardware scan exposure time in microseconds (SANE `scan-exposure-time`). None is the

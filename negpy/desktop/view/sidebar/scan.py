@@ -137,6 +137,16 @@ class ScanSidebar(QWidget):
         self.me_check = QCheckBox("Multi-exposure")
         self.me_check.setToolTip("Merge short and long colour passes for more highlight and shadow detail. Takes longer.")
 
+        self.passes_spin = QSpinBox()
+        self.passes_spin.setRange(2, 9)
+        self.passes_spin.setToolTip(
+            "How many exposure pairs to stack for multi-pass (2 = classic short+long). Requires pyopticfilm multi-pass support."
+        )
+        # Pre-seed from persisted settings so any early _update_settings_from_ui
+        # (e.g. an autofocus toggle firing during device setup) keeps the count.
+        self.passes_spin.setValue(self._settings.multi_pass)
+        self.passes_spin.setVisible(False)
+
         self.depth_row_widget = QWidget()
         depth_row = QHBoxLayout(self.depth_row_widget)
         depth_row.setContentsMargins(0, 0, 0, 0)
@@ -145,6 +155,7 @@ class ScanSidebar(QWidget):
         depth_row.addWidget(self.depth_combo, 1)
         depth_row.addWidget(self.ir_check)
         depth_row.addWidget(self.me_check)
+        depth_row.addWidget(self.passes_spin)
         self.depth_label = QLabel("Depth")
         self.form.addRow(self.depth_label, self.depth_row_widget)
         self.depth_combo.setVisible(False)
@@ -301,7 +312,8 @@ class ScanSidebar(QWidget):
         self.dpi_combo.currentTextChanged.connect(lambda: self._update_settings_from_ui())
         self.depth_combo.currentTextChanged.connect(lambda: self._update_settings_from_ui())
         self.ir_check.toggled.connect(lambda: self._update_settings_from_ui())
-        self.me_check.toggled.connect(lambda: self._update_settings_from_ui())
+        self.me_check.toggled.connect(lambda: self._on_me_toggled())
+        self.passes_spin.valueChanged.connect(lambda _v: self._update_settings_from_ui())
         self.autofocus_check.toggled.connect(lambda: self._update_settings_from_ui())
         self.ae_check.toggled.connect(lambda: self._on_ae_toggled())
         self.exposure_slider.valueChanged.connect(self._on_exposure_changed)
@@ -412,6 +424,8 @@ class ScanSidebar(QWidget):
             self.depth_label.setVisible(False)
             self.ir_check.setEnabled(False)
             self.me_check.setEnabled(False)
+            self.passes_spin.setVisible(False)
+            self.passes_spin.setEnabled(False)
             self.eject_btn.setVisible(False)
             self.frame_range_label.setVisible(False)
             self.frame_range_widget.setVisible(False)
@@ -496,14 +510,19 @@ class ScanSidebar(QWidget):
             self.ir_check.setChecked(False)
             self.ir_check.setToolTip("IR scanning not supported by this device")
 
-        # Multi-exposure (Plustek SE only today)
+        # Multi-exposure (Plustek SE / 8100 V2), the multi-pass activation,
+        # plus the Passes count spin that only shows on an ME-capable device.
         self.me_check.setEnabled(caps.multi_exposure)
+        self.passes_spin.setVisible(caps.multi_exposure)
         if caps.multi_exposure:
             self.me_check.setChecked(self._settings.multi_exposure)
             self.me_check.setToolTip("Merge short and long colour passes for more highlight and shadow detail. Takes longer.")
+            self.passes_spin.setValue(self._settings.multi_pass)
+            self.passes_spin.setEnabled(self.me_check.isChecked())
         else:
             self.me_check.setChecked(False)
             self.me_check.setToolTip("Multi-exposure not supported by this device")
+            self.passes_spin.setVisible(False)
 
         # Autofocus and auto-exposure, shown only when the device reports them.
         self._caps_autofocus = bool(caps.autofocus)
@@ -594,6 +613,11 @@ class ScanSidebar(QWidget):
 
     def _on_ae_toggled(self) -> None:
         self.exposure_slider.setEnabled(not self.ae_check.isChecked())
+        self._update_settings_from_ui()
+
+    def _on_me_toggled(self) -> None:
+        # Multi-exposure is the multi-pass activation: enable/disable the Passes count.
+        self.passes_spin.setEnabled(self.me_check.isEnabled() and self.me_check.isChecked())
         self._update_settings_from_ui()
 
     def _on_exposure_changed(self, _value: int) -> None:
@@ -761,6 +785,7 @@ class ScanSidebar(QWidget):
         depth = int(self.depth_combo.currentData() or 16)
         capture_ir = self.ir_check.isEnabled() and self.ir_check.isChecked()
         multi_exposure = self.me_check.isEnabled() and self.me_check.isChecked()
+        multi_pass = self._settings.multi_pass if multi_exposure else None
         autofocus = self._caps_autofocus and self.autofocus_check.isChecked()
         auto_exposure = self._caps_auto_exposure and self.ae_check.isChecked()
         pattern = self.pattern_edit.text().strip() or '{{ date }}_{{ "%03d" % seq }}'
@@ -779,6 +804,7 @@ class ScanSidebar(QWidget):
             depth=depth,
             capture_ir=capture_ir,
             multi_exposure=multi_exposure,
+            passes=multi_pass,
             autofocus=autofocus,
             auto_exposure=auto_exposure,
             exposure_time_us=exposure_time_us,
@@ -912,6 +938,7 @@ class ScanSidebar(QWidget):
             depth=depth,
             capture_ir=self.ir_check.isChecked() and self.ir_check.isEnabled(),
             multi_exposure=self.me_check.isChecked() and self.me_check.isEnabled(),
+            multi_pass=self.passes_spin.value(),
             autofocus=self._caps_autofocus and self.autofocus_check.isChecked(),
             auto_exposure=self._caps_auto_exposure and self.ae_check.isChecked(),
             exposure_time_us=(self.exposure_slider.value() if self.exposure_row_widget.isVisible() else None),
