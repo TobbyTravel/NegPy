@@ -67,6 +67,7 @@ def _caps_for(model: Any) -> ScannerCapabilities:
         autofocus=False,
         prescan=prescan_ready,
         prescan_dpi=PRESCAN_DPI if prescan_ready else 0,
+        prescan_mirror_x=bool(getattr(model, "mirror_x", False)) if prescan_ready else False,
         prescan_default_crop=default_frame_crop_norm(model) if prescan_ready else None,
         multi_exposure=bool(getattr(model, "scan_ready", False) and getattr(model, "exposure_long", None)),
         adapter_frame_capacity=None,
@@ -179,7 +180,7 @@ class PlustekSession:
 
 
 class PlustekBackend:
-    """ScannerBackend for OpticFilm 8200i SE."""
+    """ScannerBackend for Plustek OpticFilm scanners (pyopticfilm)."""
 
     def __init__(self, *, calib_cache: Path | None = None) -> None:
         try:
@@ -187,8 +188,8 @@ class PlustekBackend:
         except ImportError as exc:
             raise ScannerUnavailable(
                 "Plustek USB needs pyopticfilm (uv sync --group plustek). "
-                "On Windows, bind WinUSB with Zadig for OpticFilm 8200i SE (07b3:1825) — "
-                "see docs/PLUSTEK_WINDOWS.md."
+                "On Windows, bind the scanner's USB id to WinUSB with Zadig (see docs/PLUSTEK_WINDOWS.md) — "
+                "e.g. 07b3:1825 (8200i SE) or 07b3:1824 (8100 V2)."
             ) from exc
         self._calib_cache = calib_cache
         self._sessions: dict[str, PlustekSession] = {}
@@ -269,7 +270,7 @@ class PlustekBackend:
             return
         known = {d.device_id: d for d in list_devices()}
         if device_id in known:
-            raise RuntimeError(f"{device_id} is not a supported Plustek film scanner (need 07b3:130d or 07b3:1825).")
+            raise RuntimeError(f"{device_id} is not a supported Plustek film scanner (e.g. 07b3:1825 8200i SE, 07b3:1824 8100 V2).")
         raise RuntimeError(f"Unknown or disconnected device: {device_id}")
 
     def _scan_on_scanner(
@@ -282,7 +283,8 @@ class PlustekBackend:
         if not model_is_scan_ready(scanner.model):
             msg = (
                 f"{scanner.model.model} ({scanner.model.asic}) cannot scan with "
-                "pyOpticfilm in this release — only OpticFilm 8200i SE is validated."
+                "pyOpticfilm in this release — only scan-ready pyopticfilm models are supported. "
+                "See the pyopticfilm release notes for the current list."
             )
             if sys.platform != "win32":
                 msg += " Try Backend → SANE if that backend lists this scanner."
