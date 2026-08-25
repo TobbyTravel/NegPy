@@ -14,6 +14,12 @@ class ScanParams:
     depth: int
     capture_ir: bool
     multi_exposure: bool = False
+    # Multi-pass (N) bracketing (pyopticfilm with multi-pass support). None =
+    # classic 2-pass ME when multi_exposure=True. passes >= 3 reproduces the
+    # short/long pair N/2 times for SNR. exposures is an explicit per-pass
+    # exposure list and takes precedence over passes.
+    passes: int | None = None
+    exposures: tuple[int, ...] | None = None
     # Normalized (x1,y1,x2,y2) window 0..1; backend maps to device units (coolscan3 int px).
     window: tuple[float, float, float, float] | None = None
     # coolscan3 `subframe` (mm), applied to every frame. 0 = scanner default.
@@ -48,6 +54,22 @@ def clamp_scan_area(area: ScanArea) -> ScanArea:
     if y2 <= y1:
         y2 = min(1.0, y1 + 1e-3)
     return (x1, y1, x2, y2)
+
+
+def crop_to_scan_window(crop: ScanArea, *, mirror_x: bool) -> ScanArea:
+    """Map Prescan widget coords ↔ TA ``area`` for ``ScanParams.window``.
+
+    Self-inverse when ``mirror_x`` is fixed: image-left is sensor-right on mirrored
+    scanners, so trimming left chrome on the Prescan must crop the opposite TA side.
+
+    Mirrors the pre-#958 behaviour that PR #958 accidentally flattened to a plain
+    clamp, which displaced Prescan crops on mirror_x Plustek devices.
+    """
+    area = clamp_scan_area(crop)
+    if mirror_x:
+        x1, y1, x2, y2 = area
+        return (1.0 - x2, y1, 1.0 - x1, y2)
+    return area
 
 
 def clamp_frame_offset_mm(offset_mm: float, pitch_mm: float) -> float:

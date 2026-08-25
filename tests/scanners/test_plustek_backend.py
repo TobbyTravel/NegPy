@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import ast
+import inspect
 import sys
 import threading
 import types
@@ -181,6 +182,7 @@ def test_8100_v2_caps_match_pyopticfilm_model(monkeypatch):
     assert caps.ir_channel is False
     assert caps.multi_exposure is True
     assert caps.prescan is True
+    assert caps.prescan_mirror_x is True  # 8100 V2 inherits mirror_x from 8200i SE
     assert 1200 in caps.supported_dpi
 
 
@@ -331,6 +333,59 @@ def test_multi_exposure_passthrough(monkeypatch):
         threading.Event(),
     )
     assert scanner.scan.call_args.kwargs.get("multi_exposure") is True
+
+
+def test_multi_pass_passthrough(monkeypatch):
+    """N-pass forwards passes/exposures; skips on pyopticfilm without multi-pass."""
+    from pyopticfilm.scanner import Scanner as _Scanner
+
+    if "passes" not in inspect.signature(_Scanner.scan).parameters:
+        pytest.skip("pyopticfilm without multi-pass (pre-multi-pass release)")
+    _patch_enum(monkeypatch)
+    scanner = _fake_scanner()
+    # The backend probes scanner.scan's signature for multi-pass support; expose the
+    # same signature so the mock isn't mistaken for a pre-multi-pass driver.
+    scanner.scan.__signature__ = inspect.signature(_Scanner.scan)
+    monkeypatch.setattr(f"{_BACKEND}.Scanner.open", _FakeOpen(scanner))
+    PlustekBackend().scan(
+        _DEVICE_ID,
+        _params(multi_exposure=True, passes=4, exposures=(14000, 14000, 42000, 42000)),
+        lambda *_: None,
+        threading.Event(),
+    )
+    assert scanner.scan.call_args.kwargs.get("passes") == 4
+    assert scanner.scan.call_args.kwargs.get("exposures") == (14000, 14000, 42000, 42000)
+
+
+def test_multi_pass_raises_on_old_driver(monkeypatch):
+    """Multi-pass requested but installed pyopticfilm lacks it → clear error, no silent 2-pass."""
+    _patch_enum(monkeypatch)
+    scanner = _fake_scanner()
+    # Simulate a pre-multi-pass driver: a scan() signature without `passes`.
+    scanner.scan.__signature__ = inspect.Signature(
+        [
+            inspect.Parameter(name, inspect.Parameter.KEYWORD_ONLY)
+            for name in (
+                "resolution",
+                "mode",
+                "area",
+                "geometry",
+                "progress",
+                "cancel",
+                "multi_exposure",
+                "infrared",
+            )
+        ]
+    )
+    monkeypatch.setattr(f"{_BACKEND}.Scanner.open", _FakeOpen(scanner))
+    with pytest.raises(RuntimeError, match="requires a pyopticfilm build that supports Scanner.scan"):
+        PlustekBackend().scan(
+            _DEVICE_ID,
+            _params(multi_exposure=True, passes=4),
+            lambda *_: None,
+            threading.Event(),
+        )
+    scanner.scan.assert_not_called()
 
 
 def test_open_applies_quiet_usb_drain(monkeypatch):

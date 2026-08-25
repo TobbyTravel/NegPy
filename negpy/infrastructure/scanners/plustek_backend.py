@@ -37,6 +37,16 @@ from negpy.infrastructure.scanners.result import ScanResult
 logger = get_logger(__name__)
 
 
+def _scan_supports_multi_pass(scanner: "Scanner") -> bool:
+    """True when the installed pyopticfilm's Scanner.scan accepts the `passes` kwarg."""
+    try:
+        import inspect
+
+        return "passes" in inspect.signature(scanner.scan).parameters
+    except (TypeError, ValueError):
+        return False
+
+
 def _ensure_quiet_usb_drain(scanner: Scanner) -> None:
     asic = scanner.asic
     if hasattr(asic, "image_usb_pace_s"):
@@ -57,6 +67,7 @@ def _caps_for(model: Any) -> ScannerCapabilities:
         autofocus=False,
         prescan=prescan_ready,
         prescan_dpi=PRESCAN_DPI if prescan_ready else 0,
+        prescan_mirror_x=bool(getattr(model, "mirror_x", False)) if prescan_ready else False,
         prescan_default_crop=default_frame_crop_norm(model) if prescan_ready else None,
         multi_exposure=bool(getattr(model, "scan_ready", False) and getattr(model, "exposure_long", None)),
         adapter_frame_capacity=None,
@@ -114,6 +125,12 @@ def _validate_params(params: ScanParams, *, model: Any | None = None) -> None:
         raise RuntimeError(f"{getattr(model, 'model', 'device')} does not support infrared")
     if params.multi_exposure and model is not None and not getattr(model, "exposure_long", None):
         raise RuntimeError(f"{getattr(model, 'model', 'device')} does not support multi-exposure")
+    if params.passes is not None and params.passes < 2:
+        raise RuntimeError(f"Invalid multi-pass N={params.passes}; N must be >= 2")
+    if params.exposures and len(params.exposures) < 2:
+        raise RuntimeError("Multi-pass exposures must contain at least 2 values")
+    if (params.passes is not None or params.exposures is not None) and model is not None and not getattr(model, "exposure_long", None):
+        raise RuntimeError(f"{getattr(model, 'model', 'device')} does not support multi-pass")
 
 
 class PlustekSession:
@@ -297,16 +314,29 @@ class PlustekBackend:
                 _safe_progress(progress, 0.1 + 0.9 * p)
 
             scan_area = None if geometry is not None else window
-            rgb_image = scanner.scan(
+            multi_pass = params.passes is not None or params.exposures is not None
+            scan_kwargs: dict[str, Any] = dict(
                 resolution=dpi,
                 mode="color",
                 area=scan_area,
                 geometry=geometry,
                 progress=scan_progress,
                 cancel=cancel,
-                multi_exposure=multi_exposure,
                 infrared=capture_ir,
             )
+            if multi_pass:
+                if not _scan_supports_multi_pass(scanner):
+                    raise RuntimeError(
+                        f"Multi-pass (N={params.passes or 'exposures'}) requires a pyopticfilm "
+                        "build that supports Scanner.scan(passes=...); please update pyopticfilm."
+                    )
+                scan_kwargs["passes"] = params.passes
+                if params.exposures is not None:
+                    scan_kwargs["exposures"] = params.exposures
+            else:
+                # Classic 2-pass multi-exposure, backported to any pyopticfilm release.
+                scan_kwargs["multi_exposure"] = multi_exposure
+            rgb_image = scanner.scan(**scan_kwargs)
             ir_plane = np.asarray(rgb_image.ir) if capture_ir and rgb_image.ir is not None else None
         except ScanCancelled as exc:
             raise RuntimeError("Scan cancelled") from exc
