@@ -380,18 +380,10 @@ def test_off_mode_defaults_exposure_mode_to_adaptive(monkeypatch):
     assert scanner.scan.call_args.kwargs.get("me_exposure_mode") == "adaptive"
 
 
-def test_fixed_mode_pins_exposure_mode(monkeypatch):
-    _patch_enum(monkeypatch)
-    scanner = _fake_scanner()
-    monkeypatch.setattr(f"{_BACKEND}.Scanner.open", _FakeOpen(scanner))
-    PlustekBackend().scan(
-        _DEVICE_ID,
-        _params(multi_exposure_mode=MultiExposureMode.FIXED),
-        lambda *_: None,
-        threading.Event(),
-    )
-    assert scanner.scan.call_args.kwargs.get("multi_exposure") is True
-    assert scanner.scan.call_args.kwargs.get("me_exposure_mode") == "fixed"
+def test_multi_exposure_mode_has_no_fixed_option():
+    """Fixed-long-exposure mode is a pyopticfilm lab/debug-only concept — NegPy's simplified
+    surface never exposes it (see Scan Lab for unrestricted access)."""
+    assert set(MultiExposureMode) == {MultiExposureMode.OFF, MultiExposureMode.ADAPTIVE}
 
 
 def test_n_passes_flows_through_to_scanner_scan(monkeypatch):

@@ -9,20 +9,19 @@ class ScanMode(StrEnum):
 
 
 class MultiExposureMode(StrEnum):
-    """How the top exposure is chosen when merging short+long colour passes.
+    """Whether a short+long colour pass pair is merged for extended dynamic range.
 
     OFF: one exposure, the fast path. ADAPTIVE: short+long merged, long exposure picked per
-    frame from image content (today's only multi-exposure behavior). FIXED: short+long merged,
-    long exposure pinned to a fixed, per-model-validated value instead of chosen per frame.
+    frame from image content — today's only multi-exposure behavior in this app (pyopticfilm's
+    fixed-long-exposure mode is a lab/debug-only option, not exposed here).
 
-    Orthogonal to ``ScanParams.n_passes``: this picks *which* exposure(s) to merge, while
-    ``n_passes`` repeats whichever exposure(s) are chosen for a same-exposure SNR stack — the
-    two compose (pyopticfilm's "Adaptive/Fixed Multi-Pass") rather than being alternatives.
+    Orthogonal to ``ScanParams.n_passes``: this picks *whether* to merge a second exposure,
+    while ``n_passes`` repeats whichever exposure(s) are chosen for a same-exposure SNR stack —
+    the two compose (pyopticfilm's "Adaptive Multi-Pass") rather than being alternatives.
     """
 
     OFF = "off"
     ADAPTIVE = "adaptive"
-    FIXED = "fixed"
 
 
 #: Repeats of the same exposure to stack for an SNR gain (pyopticfilm's `n_passes`); 1 = no

@@ -346,9 +346,11 @@ class PlustekBackend:
         capture_ir = bool(params.capture_ir)
         me_mode = params.multi_exposure_mode
         multi_exposure = me_mode != MultiExposureMode.OFF
-        # Irrelevant to pyopticfilm when multi_exposure is False; pass its own default rather
-        # than a value that would misleadingly suggest ME is fixed-mode when it's simply off.
-        me_exposure_mode = "fixed" if me_mode == MultiExposureMode.FIXED else "adaptive"
+        # "adaptive" is pyopticfilm's own default and the only mode this app exposes — its
+        # fixed-long-exposure mode is lab/debug-only (see pyopticfilm's Scan Lab). Irrelevant to
+        # pyopticfilm when multi_exposure is False; sending its default rather than omitting it
+        # keeps this call shape uniform regardless of mode.
+        me_exposure_mode = "adaptive"
         n_passes = int(params.n_passes)
         window = params.window
         geometry = self._default_scan_geometry(scanner, dpi=dpi, window=window)

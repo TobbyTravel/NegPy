@@ -152,13 +152,22 @@ def test_legacy_multi_exposure_false_migrates_to_off_mode():
 
 
 def test_a_blob_with_multi_exposure_mode_already_set_is_not_double_migrated():
-    restored = ScannerSettings.from_dict({"multi_exposure": True, "multi_exposure_mode": "fixed"})
-    assert restored.multi_exposure_mode == "fixed"
+    restored = ScannerSettings.from_dict({"multi_exposure": True, "multi_exposure_mode": "adaptive"})
+    assert restored.multi_exposure_mode == "adaptive"
 
 
 def test_an_unknown_multi_exposure_mode_falls_back_to_off():
     restored = ScannerSettings.from_dict({"multi_exposure_mode": "some_future_mode"})
     assert restored.multi_exposure_mode == "off"
+
+
+def test_legacy_fixed_mode_degrades_to_off():
+    """Fixed-long-exposure mode was dropped from NegPy's surface (lab/debug-only in
+    pyopticfilm now) — a persisted "fixed" blob from before this change must degrade safely,
+    not crash, and must not touch the independent n_passes value."""
+    restored = ScannerSettings.from_dict({"multi_exposure_mode": "fixed", "n_passes": 3})
+    assert restored.multi_exposure_mode == "off"
+    assert restored.n_passes == 3
 
 
 def test_fresh_install_defaults_n_passes_to_one():
