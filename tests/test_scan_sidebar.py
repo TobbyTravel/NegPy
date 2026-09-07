@@ -27,7 +27,7 @@ from PyQt6.QtWidgets import QApplication
 from negpy.desktop.view.sidebar.scan import ScanSidebar, estimated_frame_bytes
 from negpy.desktop.view.styles.theme import THEME
 from negpy.infrastructure.scanners.base import ScannerCapabilities, ScannerDevice
-from negpy.infrastructure.scanners.params import FILM_TYPES, ScanMode
+from negpy.infrastructure.scanners.params import FILM_TYPES, MultiExposureMode, ScanMode
 
 if not QApplication.instance():
     _app = QApplication(sys.argv)
@@ -82,6 +82,7 @@ SE_CAPS = ScannerCapabilities(
     prescan=True,
     prescan_dpi=1200,
     multi_exposure=True,
+    max_n_passes=9,
     prescan_default_crop=(0.0, 0.35, 1.0, 0.65),
 )
 SE_DEVICE = ScannerDevice(
@@ -222,10 +223,9 @@ def test_minimal_device_hides_coolscan_controls() -> None:
 def test_se_device_shows_prescan() -> None:
     sidebar, _ = _sidebar(SE_DEVICE, settings={"backend": "plustek"})
     assert sidebar.prescan_widget.isVisibleTo(sidebar) is True
-    assert sidebar.prescan_label.isVisibleTo(sidebar) is True
     assert sidebar.scan_window_widget.isVisibleTo(sidebar) is False
     assert sidebar.ir_check.isEnabled() is True
-    assert sidebar.me_check.isEnabled() is True
+    assert sidebar.me_combo.isEnabled() is True
     assert sidebar.frame_spec_edit.isVisibleTo(sidebar) is False
 
 
@@ -246,8 +246,29 @@ def test_sane_backend_keeps_single_holder_window_control(monkeypatch) -> None:
 
 def test_minimal_device_disables_multi_exposure() -> None:
     sidebar, _ = _sidebar(MINIMAL_DEVICE)
-    assert sidebar.me_check.isEnabled() is False
-    assert sidebar.me_check.isChecked() is False
+    assert sidebar.me_combo.isEnabled() is False
+    assert sidebar._me_mode() == MultiExposureMode.OFF
+
+
+def test_minimal_device_hides_passes_control() -> None:
+    sidebar, _ = _sidebar(MINIMAL_DEVICE)
+    assert sidebar.passes_combo.isVisibleTo(sidebar) is False
+    assert sidebar._passes() == 1
+
+
+def test_passes_above_one_disables_and_unchecks_ir() -> None:
+    sidebar, _ = _sidebar(SE_DEVICE, settings={"backend": "plustek", "capture_ir": True})
+    idx = sidebar.passes_combo.findData(3)
+    assert idx >= 0
+    sidebar.passes_combo.setCurrentIndex(idx)
+    assert sidebar.ir_check.isChecked() is False
+
+
+def test_checking_ir_resets_passes_to_one() -> None:
+    sidebar, _ = _sidebar(SE_DEVICE, settings={"backend": "plustek", "n_passes": 3})
+    assert sidebar._passes() == 3
+    sidebar.ir_check.setChecked(True)
+    assert sidebar._passes() == 1
 
 
 def test_scan_params_include_prescan_crop() -> None:
@@ -985,11 +1006,11 @@ def test_a_pass_the_device_cannot_run_is_not_shown_at_all() -> None:
     # Disabled-with-a-reason is for a pass the film blocks; one the transport lacks goes away.
     sidebar, _ = _sidebar(MINIMAL_DEVICE)
     assert sidebar.ir_check.isVisibleTo(sidebar) is False
-    assert sidebar.me_check.isVisibleTo(sidebar) is False
+    assert sidebar.me_combo.isVisibleTo(sidebar) is False
 
     sidebar, _ = _sidebar(SE_DEVICE, settings={"backend": "plustek"})
     assert sidebar.ir_check.isVisibleTo(sidebar) is True
-    assert sidebar.me_check.isVisibleTo(sidebar) is True
+    assert sidebar.me_combo.isVisibleTo(sidebar) is True
 
 
 def test_a_film_that_blocks_infrared_leaves_the_control_visible_to_explain_itself() -> None:
