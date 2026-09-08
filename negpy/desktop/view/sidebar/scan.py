@@ -26,6 +26,7 @@ from negpy.infrastructure.scanners.base import ScannerCapabilities, ScannerDevic
 from negpy.infrastructure.scanners.params import (
     FILM_TYPES,
     FilmType,
+    MAX_N_PASSES,
     MultiExposureMode,
     film_passes_infrared,
 )
@@ -35,11 +36,10 @@ from negpy.infrastructure.scanners.settings import ScannerSettings
 
 class ScanCaptureMode(StrEnum):
     """The 4 scan modes this app exposes — a UI-only presentation of pyopticfilm's two real,
-    orthogonal axes (``multi_exposure_mode`` and ``n_passes``). Never persisted or sent to the
+    orthogonal axes (``multi_exposure`` and ``n_passes``). Never persisted or sent to the
     backend directly; ``_capture_mode_from_params``/``_params_from_capture_mode`` translate to
-    and from the real ``ScanParams``/``ScannerSettings`` fields. pyopticfilm's fixed-long-exposure
-    ME mode and its manual exposure overrides are lab/debug-only (see Scan Lab) and have no
-    equivalent here."""
+    and from the real ``ScanParams``/``ScannerSettings`` fields. pyopticfilm's manual exposure
+    overrides are lab/debug-only (see Scan Lab) and have no equivalent here."""
 
     SINGLE_PASS = "single_pass"
     MULTI_PASS = "multi_pass"
@@ -59,25 +59,23 @@ _CAPTURE_MODE_LABELS: tuple[tuple[ScanCaptureMode, str, str], ...] = (
     (
         ScanCaptureMode.ADAPTIVE_ME,
         "Adaptive Multi-Exposure",
-        "Automatically captures a short and long exposure and fuses them for extended dynamic "
-        "range. No stacking.",
+        "Automatically captures a short and long exposure and fuses them for extended dynamic range. No stacking.",
     ),
     (
         ScanCaptureMode.ADAPTIVE_MULTI_PASS,
         "Adaptive Multi-Pass",
-        "Combines adaptive dual-exposure fusion with multi-pass stacking for maximum dynamic "
-        "range and noise reduction. Slowest option.",
+        "Combines adaptive dual-exposure fusion with multi-pass stacking for maximum dynamic range and noise reduction. Slowest option.",
     ),
 )
 
 _ME_CAPTURE_MODES = (ScanCaptureMode.ADAPTIVE_ME, ScanCaptureMode.ADAPTIVE_MULTI_PASS)
 _STACKING_CAPTURE_MODES = (ScanCaptureMode.MULTI_PASS, ScanCaptureMode.ADAPTIVE_MULTI_PASS)
 
-#: Passes slider bounds. Mirrored (not imported) from pyopticfilm's own bound, matching this
-#: file's existing convention for the same reason (see params.py's MAX_N_PASSES comment) — the
-#: floor is 2 here specifically because 1 pass is "not stacking", represented by mode choice.
+#: Passes slider floor. UI-only — 1 pass is "not stacking", represented by mode choice, so the
+#: slider (shown only for a stacking mode) never needs to reach it. The ceiling is
+#: pyopticfilm's own ``MAX_N_PASSES``, imported directly since this file already reaches into
+#: params.py for other names.
 MIN_PASSES_UI = 2
-MAX_PASSES_UI = 9
 
 
 def _capture_mode_from_params(mode: MultiExposureMode, n_passes: int) -> ScanCaptureMode:
@@ -88,9 +86,7 @@ def _capture_mode_from_params(mode: MultiExposureMode, n_passes: int) -> ScanCap
     return ScanCaptureMode.MULTI_PASS if stacking else ScanCaptureMode.SINGLE_PASS
 
 
-def _params_from_capture_mode(
-    capture_mode: ScanCaptureMode, slider_value: int
-) -> tuple[MultiExposureMode, int]:
+def _params_from_capture_mode(capture_mode: ScanCaptureMode, slider_value: int) -> tuple[MultiExposureMode, int]:
     mode = MultiExposureMode.ADAPTIVE if capture_mode in _ME_CAPTURE_MODES else MultiExposureMode.OFF
     n_passes = slider_value if capture_mode in _STACKING_CAPTURE_MODES else 1
     return mode, n_passes
@@ -323,14 +319,13 @@ class ScanSidebar(QWidget):
         passes_row.setContentsMargins(0, 0, 0, 0)
         passes_row.setSpacing(6)
         self.passes_slider = QSlider(Qt.Orientation.Horizontal)
-        self.passes_slider.setRange(MIN_PASSES_UI, MAX_PASSES_UI)
+        self.passes_slider.setRange(MIN_PASSES_UI, MAX_N_PASSES)
         self.passes_slider.setSingleStep(1)
         self.passes_slider.setPageStep(1)
         self.passes_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
         self.passes_slider.setTickInterval(1)
         self.passes_slider.setToolTip(
-            f"Number of exposures to stack ({MIN_PASSES_UI}-{MAX_PASSES_UI}). Each extra pass "
-            "adds roughly one more scan pass per exposure."
+            f"Number of exposures to stack ({MIN_PASSES_UI}-{MAX_N_PASSES}). Each extra pass adds roughly one more scan pass per exposure."
         )
         self.passes_value_label = QLabel(str(MIN_PASSES_UI))
         self.passes_value_label.setMinimumWidth(20)
@@ -750,8 +745,10 @@ class ScanSidebar(QWidget):
             enabled = (
                 True
                 if capture_mode == ScanCaptureMode.SINGLE_PASS
-                else bool(caps.multi_exposure) if capture_mode == ScanCaptureMode.ADAPTIVE_ME
-                else caps.max_n_passes > 1 if capture_mode == ScanCaptureMode.MULTI_PASS
+                else bool(caps.multi_exposure)
+                if capture_mode == ScanCaptureMode.ADAPTIVE_ME
+                else caps.max_n_passes > 1
+                if capture_mode == ScanCaptureMode.MULTI_PASS
                 else bool(caps.multi_exposure) and caps.max_n_passes > 1  # ADAPTIVE_MULTI_PASS
             )
             item = self.mode_combo.model().item(idx)
@@ -763,13 +760,15 @@ class ScanSidebar(QWidget):
             else MultiExposureMode.OFF,
             self._settings.n_passes,
         )
-        self._set_capture_mode(
-            _valid_capture_mode(saved_mode, has_me=bool(caps.multi_exposure), has_stack=caps.max_n_passes > 1)
-        )
+        self._set_capture_mode(_valid_capture_mode(saved_mode, has_me=bool(caps.multi_exposure), has_stack=caps.max_n_passes > 1))
+        # IR and Multi-Pass stacking cannot combine (see _on_ir_toggled) — a settings blob
+        # saved with both set (signals are blocked through this whole method, so the toggle
+        # handlers that normally resolve this never fire) must self-heal here the same way,
+        # rather than reaching Scan and failing there.
+        if self._capture_mode() in _STACKING_CAPTURE_MODES and self.ir_check.isChecked():
+            self.ir_check.setChecked(False)
         self.passes_slider.setRange(MIN_PASSES_UI, max(MIN_PASSES_UI, caps.max_n_passes))
-        self.passes_slider.setValue(
-            min(max(self._settings.n_passes, MIN_PASSES_UI), max(MIN_PASSES_UI, caps.max_n_passes))
-        )
+        self.passes_slider.setValue(min(max(self._settings.n_passes, MIN_PASSES_UI), max(MIN_PASSES_UI, caps.max_n_passes)))
         self.passes_value_label.setText(str(self.passes_slider.value()))
         self._sync_passes_visibility()
 

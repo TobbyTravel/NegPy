@@ -350,7 +350,6 @@ def test_multi_exposure_passthrough(monkeypatch):
         threading.Event(),
     )
     assert scanner.scan.call_args.kwargs.get("multi_exposure") is True
-    assert scanner.scan.call_args.kwargs.get("me_exposure_mode") == "adaptive"
     assert scanner.scan.call_args.kwargs.get("align_passes") is True
     assert scanner.scan.call_args.kwargs.get("n_passes") == 1
 
@@ -365,19 +364,8 @@ def test_colour_scan_passes_adaptive_me_mode(monkeypatch):
         lambda *_: None,
         threading.Event(),
     )
-    assert scanner.scan.call_args.kwargs.get("me_exposure_mode") == "adaptive"
+    assert scanner.scan.call_args.kwargs.get("multi_exposure") is True
     assert scanner.scan.call_args.kwargs.get("on_status") is not None
-
-
-def test_off_mode_defaults_exposure_mode_to_adaptive(monkeypatch):
-    """OFF is a no-op path — me_exposure_mode is irrelevant to pyopticfilm when
-    multi_exposure is False, so the value passed just needs to be pyopticfilm's own default."""
-    _patch_enum(monkeypatch)
-    scanner = _fake_scanner()
-    monkeypatch.setattr(f"{_BACKEND}.Scanner.open", _FakeOpen(scanner))
-    PlustekBackend().scan(_DEVICE_ID, _params(), lambda *_: None, threading.Event())
-    assert scanner.scan.call_args.kwargs.get("multi_exposure") is False
-    assert scanner.scan.call_args.kwargs.get("me_exposure_mode") == "adaptive"
 
 
 def test_multi_exposure_mode_has_no_fixed_option():
@@ -401,6 +389,21 @@ def test_n_passes_flows_through_to_scanner_scan(monkeypatch):
     assert scanner.scan.call_args.kwargs.get("align_passes") is True
 
 
+def test_n_passes_upper_boundary_accepted(monkeypatch):
+    """9 is the top of the valid range (10 is rejected — see
+    test_n_passes_rejects_out_of_range_value) and must actually reach scanner.scan."""
+    _patch_enum(monkeypatch)
+    scanner = _fake_scanner()
+    monkeypatch.setattr(f"{_BACKEND}.Scanner.open", _FakeOpen(scanner))
+    PlustekBackend().scan(
+        _DEVICE_ID,
+        _params(n_passes=9),
+        lambda *_: None,
+        threading.Event(),
+    )
+    assert scanner.scan.call_args.kwargs.get("n_passes") == 9
+
+
 def test_adaptive_multi_pass_passes_both_axes(monkeypatch):
     """multi_exposure_mode and n_passes are independent — both reach scanner.scan together."""
     _patch_enum(monkeypatch)
@@ -413,7 +416,6 @@ def test_adaptive_multi_pass_passes_both_axes(monkeypatch):
         threading.Event(),
     )
     assert scanner.scan.call_args.kwargs.get("multi_exposure") is True
-    assert scanner.scan.call_args.kwargs.get("me_exposure_mode") == "adaptive"
     assert scanner.scan.call_args.kwargs.get("n_passes") == 4
 
 
