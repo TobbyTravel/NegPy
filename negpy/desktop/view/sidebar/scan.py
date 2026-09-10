@@ -24,9 +24,11 @@ from negpy.desktop.view.styles.templates import StatusStrip, hint_label, icon_bu
 from negpy.desktop.view.styles.theme import THEME
 from negpy.infrastructure.scanners.base import ScannerCapabilities, ScannerDevice
 from negpy.infrastructure.scanners.params import (
+    DEFAULT_N_PASSES,
     FILM_TYPES,
     FilmType,
     MAX_N_PASSES,
+    MIN_N_PASSES,
     MultiExposureMode,
     film_passes_infrared,
 )
@@ -152,7 +154,6 @@ class ScanSidebar(QWidget):
         self._caps_clean = False
         self._caps_superfine = False
         self._caps_max_samples = 1
-        self._caps_max_n_passes = 1
         self._caps_film_formats: tuple[str, ...] = ()
         self._caps_film_types: tuple[str, ...] = ()
         self._device_ir = False
@@ -646,7 +647,6 @@ class ScanSidebar(QWidget):
             self._caps_clean = False
             self._caps_superfine = False
             self._caps_max_samples = 1
-            self._caps_max_n_passes = 1
             self._caps_film_formats = ()
             self._caps_film_types = ()
             self._device_ir = False
@@ -735,7 +735,6 @@ class ScanSidebar(QWidget):
         # real orthogonal axes (multi_exposure_mode, n_passes) as 4 named options. Per-item
         # capability gating below; the whole row hides when neither ME nor Multi-Pass applies —
         # a device with neither has nothing to choose, mode is implicitly Single-Pass.
-        self._caps_max_n_passes = int(caps.max_n_passes)
         show_mode = bool(caps.multi_exposure) or caps.max_n_passes > 1
         self.mode_label.setVisible(show_mode)
         self.mode_combo.setVisible(show_mode)
@@ -767,8 +766,10 @@ class ScanSidebar(QWidget):
         # rather than reaching Scan and failing there.
         if self._capture_mode() in _STACKING_CAPTURE_MODES and self.ir_check.isChecked():
             self.ir_check.setChecked(False)
-        self.passes_slider.setRange(MIN_PASSES_UI, max(MIN_PASSES_UI, caps.max_n_passes))
-        self.passes_slider.setValue(min(max(self._settings.n_passes, MIN_PASSES_UI), max(MIN_PASSES_UI, caps.max_n_passes)))
+        ceiling = max(MIN_PASSES_UI, caps.max_n_passes)
+        starting_passes = DEFAULT_N_PASSES if self._settings.n_passes <= MIN_N_PASSES else self._settings.n_passes
+        self.passes_slider.setRange(MIN_PASSES_UI, ceiling)
+        self.passes_slider.setValue(min(max(starting_passes, MIN_PASSES_UI), ceiling))
         self.passes_value_label.setText(str(self.passes_slider.value()))
         self._sync_passes_visibility()
 
