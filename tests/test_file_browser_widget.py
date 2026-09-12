@@ -141,6 +141,72 @@ def test_context_menu_offers_unsplit_only_for_a_diptych(browser, session):
     assert "Unsplit diptych" in _action_labels(browser._build_context_menu())
 
 
+def test_unsplit_diptych_menu_action_only_enabled_for_a_diptych(browser, session):
+    """A right-click context menu was the only other way in, easy to miss when the
+    panel just looks locked with no clue why. Synced on the Half Frame menu's own
+    aboutToShow rather than the general sync_ui, so it reflects whichever frame is
+    active at the moment the menu actually opens."""
+    session.state.selected_file_idx = 0
+    browser._sync_half_frame_menu()
+    assert not browser._unsplit_diptych_action.isEnabled()
+
+    session.state.uploaded_files[0]["diptych"] = True
+    browser._sync_half_frame_menu()
+    assert browser._unsplit_diptych_action.isEnabled()
+
+
+def test_context_menu_offers_per_frame_split_only_for_a_half(browser, session):
+    session.state.selected_indices = [0]
+    session.state.selected_file_idx = 0
+    browser.controller.half_frame_override.return_value = None
+    assert "Adjust split for this frame…" not in _action_labels(browser._build_context_menu())
+
+    session.state.uploaded_files[0]["half"] = 1
+    session.state.uploaded_files[0]["hash"] = "h1#1"
+    assert "Adjust split for this frame…" in _action_labels(browser._build_context_menu())
+    # No override saved yet, so nothing to reset.
+    assert "Reset split to roll default" not in _action_labels(browser._build_context_menu())
+
+
+def test_context_menu_offers_reset_only_with_a_saved_override(browser, session):
+    session.state.selected_indices = [0]
+    session.state.selected_file_idx = 0
+    session.state.uploaded_files[0]["half"] = 1
+    session.state.uploaded_files[0]["hash"] = "h1#1"
+    browser.controller.half_frame_override.return_value = {"split_x": 0.4}
+    assert "Reset split to roll default" in _action_labels(browser._build_context_menu())
+
+
+def test_current_file_returns_the_base_hash_for_a_split_asset(browser, session):
+    """Both halves share one path, so matching by path alone would always return
+    whichever comes first in the list -- never necessarily the active one -- and its
+    own #1/#2 hash, which save_half_frame_override does not key by."""
+    session.state.uploaded_files = [
+        {"path": "/tmp/scan.tif", "hash": "h1#1", "half": 1},
+        {"path": "/tmp/scan.tif", "hash": "h1#2", "half": 2},
+    ]
+    session.state.current_file_path = "/tmp/scan.tif"
+    session.state.current_file_hash = "h1#2"  # the active half, listed second
+    assert browser._current_file() == ("/tmp/scan.tif", "h1")
+
+
+def test_adjust_half_frame_split_reloads_only_on_apply(browser, session):
+    browser.controller.open_half_frame_dialog.return_value = None
+    browser._on_adjust_half_frame_split("/tmp/scan.tif", "h1")
+    browser.controller.request_asset_discovery.assert_not_called()
+
+    browser.controller.open_half_frame_dialog.return_value = {"split_x": 0.4}
+    browser._on_adjust_half_frame_split("/tmp/scan.tif", "h1")
+    browser.controller.open_half_frame_dialog.assert_called_with("/tmp/scan.tif", "h1", initial_scope="current")
+    browser.controller.request_asset_discovery.assert_called_once()
+
+
+def test_reset_half_frame_split_clears_and_reloads(browser, session):
+    browser._on_reset_half_frame_split("h1")
+    browser.controller.clear_half_frame_override.assert_called_once_with("h1")
+    browser.controller.request_asset_discovery.assert_called_once()
+
+
 def test_unsplit_diptych_needs_the_confirm(browser):
     with patch("negpy.desktop.view.sidebar.files.QMessageBox.exec"):
         browser.prompt_undiptych()  # no button clicked: rejected

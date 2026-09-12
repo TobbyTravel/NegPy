@@ -1,4 +1,5 @@
 import os
+from typing import Optional
 
 import qtawesome as qta
 from PyQt6.QtCore import (
@@ -432,10 +433,20 @@ class FileBrowser(QWidget):
         self.half_frame_btn.setChecked(bool(self.session.repo.get_global_setting("half_frame_mode", False)))
         self._update_half_frame_style(self.half_frame_btn.isChecked())
 
-        self.half_frame_adjust_btn = QToolButton()
-        self.half_frame_adjust_btn.setIcon(qta.icon("mdi.tune-variant", color=THEME.text_primary))
-        self.half_frame_adjust_btn.setToolTip("Adjust Half Frame split — reposition the crop rectangle and split line for the current scan")
-        self.half_frame_adjust_btn.clicked.connect(self._on_half_frame_adjust)
+        # One button for every half-frame action, rather than one icon apiece: the menu
+        # is rebuilt on each open, so "Unsplit diptych" only enables for the active frame's
+        # diptych state without a separate sync path.
+        self.half_frame_menu_btn = QToolButton()
+        self.half_frame_menu_btn.setIcon(qta.icon("mdi.tune-variant", color=THEME.text_primary))
+        self.half_frame_menu_btn.setToolTip("Half Frame actions — adjust a split, auto-detect every frame, or unsplit a diptych")
+        self.half_frame_menu_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        half_frame_menu = QMenu(self.half_frame_menu_btn)
+        half_frame_menu.addAction("Adjust split…").triggered.connect(self._on_half_frame_adjust)
+        half_frame_menu.addAction("Auto-detect all splits").triggered.connect(self._on_half_frame_auto_all)
+        self._unsplit_diptych_action = half_frame_menu.addAction("Unsplit diptych")
+        self._unsplit_diptych_action.triggered.connect(self.prompt_undiptych)
+        half_frame_menu.aboutToShow.connect(self._sync_half_frame_menu)
+        self.half_frame_menu_btn.setMenu(half_frame_menu)
 
         self.apply_btn = QToolButton()
         self.apply_btn.setIcon(qta.icon("fa5s.clone", color=THEME.text_primary))
@@ -496,7 +507,7 @@ class FileBrowser(QWidget):
             self.hot_folder_btn,
             self.rgb_scan_btn,
             self.half_frame_btn,
-            self.half_frame_adjust_btn,
+            self.half_frame_menu_btn,
             self.apply_btn,
             self.sheet_btn,
             self.sort_btn,
@@ -516,7 +527,7 @@ class FileBrowser(QWidget):
             (self.hot_folder_btn, "Hot Folder"),
             (self.rgb_scan_btn, "Trichrome Scan"),
             (self.half_frame_btn, "Half Frame"),
-            (self.half_frame_adjust_btn, "Adjust Half Frame"),
+            (self.half_frame_menu_btn, "Half Frame actions"),
             (self.apply_btn, "Apply settings"),
             (None, None),
             (self.sheet_btn, "Sheet filter"),
@@ -775,6 +786,11 @@ class FileBrowser(QWidget):
         else:
             self.unload_btn.setToolTip("Clear all")
 
+    def _sync_half_frame_menu(self) -> None:
+        state = self.session.state
+        active = state.uploaded_files[state.selected_file_idx] if 0 <= state.selected_file_idx < len(state.uploaded_files) else {}
+        self._unsplit_diptych_action.setEnabled(bool(active.get("diptych")))
+
     def sync_ui(self) -> None:
         """Updates list selection to match session state."""
         model = self.session.asset_model
@@ -979,22 +995,47 @@ class FileBrowser(QWidget):
         icon_color = "white" if checked else THEME.text_primary
         self.half_frame_btn.setIcon(qta.icon("mdi.view-split-vertical", color=icon_color))
 
+    def _current_file(self) -> tuple[Optional[str], Optional[str]]:
+        """The current frame's (path, base hash), falling back to the first loaded file.
+
+        Both halves of a half-frame asset share one path, so matching by path alone
+        would always return whichever half comes first in the list — never the one
+        actually active — and its own suffixed hash, which save_half_frame_override
+        does not key by. base_hash() makes either mistake harmless.
+        """
+        from negpy.services.assets.half_frame import base_hash
+
+        current = self.session.state.current_file_path
+        for f in self.session.state.uploaded_files:
+            if f.get("path") == current:
+                return f.get("path"), base_hash(f.get("hash"))
+        if self.session.state.uploaded_files:
+            f = self.session.state.uploaded_files[0]
+            return f.get("path"), base_hash(f.get("hash"))
+        return None, None
+
+    def _selected_base_hashes(self) -> list[str]:
+        """Base hashes of the filmstrip selection, deduped (a half-frame asset's two
+        halves can both be selected) and composites excluded."""
+        from negpy.services.assets.half_frame import base_hash, is_composite
+
+        files = self.session.state.uploaded_files
+        seen: dict[str, None] = {}
+        for i in self.session.state.selected_indices:
+            if 0 <= i < len(files) and not is_composite(files[i]):
+                h = base_hash(files[i]["hash"])
+                if h:
+                    seen.setdefault(h, None)
+        return list(seen)
+
     def _on_half_frame_toggled(self, checked: bool) -> None:
         self._update_half_frame_style(checked)
         if checked and self.session.state.uploaded_files:
             # Offer the rectangle editor on the current frame. The saved profile applies to every
             # half-frame split from then on.
-            current = self.session.state.current_file_path
-            path = None
-            if current:
-                for f in self.session.state.uploaded_files:
-                    if f.get("path") == current:
-                        path = current
-                        break
-            if path is None:
-                path = self.session.state.uploaded_files[0].get("path")
-            if path:
-                profile = self.controller.open_half_frame_dialog(path)
+            path, file_hash = self._current_file()
+            if path and file_hash:
+                profile = self.controller.open_half_frame_dialog(path, file_hash, initial_scope="all")
                 if profile is None:
                     # User cancelled or closed the dialog — revert the toggle without
                     # activating half-frame mode so Cancel/X behaves as expected.
@@ -1006,27 +1047,39 @@ class FileBrowser(QWidget):
         self.controller.set_half_frame_mode(checked)
 
     def _on_half_frame_adjust(self) -> None:
-        """Re-open the half-frame rectangle editor on the current image."""
-        current = self.session.state.current_file_path
-        path = None
-        if current:
-            for f in self.session.state.uploaded_files:
-                if f.get("path") == current:
-                    path = current
-                    break
-        if path is None and self.session.state.uploaded_files:
-            path = self.session.state.uploaded_files[0].get("path")
-        if not path:
+        """Open the half-frame rectangle editor on the current image; its own
+        Apply ▾ picks what the result gets saved to."""
+        path, file_hash = self._current_file()
+        if not path or not file_hash:
             return
-        profile = self.controller.open_half_frame_dialog(path)
-        if profile is not None:
-            # Re-discover so the new profile takes effect immediately.
-            files = self.session.state.uploaded_files
-            self.controller.request_asset_discovery(
-                [f["path"] for f in files if "path" in f],
-                replace_existing=True,
-                reselect_path=self.session.state.current_file_path,
-            )
+        result = self.controller.open_half_frame_dialog(path, file_hash, selected_hashes=self._selected_base_hashes())
+        if result is not None:
+            self._reload_after_half_frame_change()
+
+    def _on_half_frame_auto_all(self) -> None:
+        """Detection runs off the GUI thread; the controller saves the results and
+        reloads once it reports back, tracked by the status bar's progress readout."""
+        self.controller.auto_detect_all_half_frame_splits()
+
+    def _reload_after_half_frame_change(self) -> None:
+        """Re-discover so a profile/override change takes effect immediately."""
+        files = self.session.state.uploaded_files
+        self.controller.request_asset_discovery(
+            [f["path"] for f in files if "path" in f],
+            replace_existing=True,
+            reselect_path=self.session.state.current_file_path,
+        )
+
+    def _on_adjust_half_frame_split(self, path: str, base_hash: str) -> None:
+        """Open the rectangle editor for one file, defaulting Apply to just that
+        frame — for the odd frame the roll-wide split still gets wrong."""
+        result = self.controller.open_half_frame_dialog(path, base_hash, initial_scope="current")
+        if result is not None:
+            self._reload_after_half_frame_change()
+
+    def _on_reset_half_frame_split(self, base_hash: str) -> None:
+        self.controller.clear_half_frame_override(base_hash)
+        self._reload_after_half_frame_change()
 
     def _scan_folder(self) -> None:
         if not self.session.state.uploaded_files:
@@ -1207,6 +1260,15 @@ class FileBrowser(QWidget):
                 menu.addAction("Unmerge exposures").triggered.connect(lambda: self.controller.request_unmerge_hdr())
             if active.get("diptych"):
                 menu.addAction("Unsplit diptych").triggered.connect(self.prompt_undiptych)
+            if active.get("half"):
+                from negpy.services.assets.half_frame import base_hash
+
+                base = base_hash(active.get("hash"))
+                menu.addAction("Adjust split for this frame…").triggered.connect(
+                    lambda: self._on_adjust_half_frame_split(active["path"], base)
+                )
+                if base and self.controller.half_frame_override(base) is not None:
+                    menu.addAction("Reset split to roll default").triggered.connect(lambda: self._on_reset_half_frame_split(base))
         menu.addSeparator()
         unload_label = "Unload Selected" if multi else "Unload"
         menu.addAction(unload_label).triggered.connect(self._on_remove_from_menu)

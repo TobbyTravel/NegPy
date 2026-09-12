@@ -27,6 +27,7 @@ from negpy.desktop.workers.export import ExportTask, ExportWorker, LinearOutputT
 from negpy.desktop.workers.render import (
     AssetDiscoveryTask,
     AssetDiscoveryWorker,
+    AutoDetectAllSplitsTask,
     rgb_grouping_notice,
     rgb_nothing_matched_message,
     BatchAutoCropInput,
@@ -77,12 +78,14 @@ from negpy.domain.models import (
 )
 from negpy.services.assets.composites import forget_composite, restore_maps
 from negpy.services.assets.half_frame import (
+    HalfGeometry,
     base_hash,
     diptych_configs,
     forget_split_scan,
     half_hash,
     half_of,
     is_composite,
+    remap_workspace_config,
     remember_split_scans,
     split_scans,
 )
@@ -242,6 +245,7 @@ class _DiscoveryRequest:
     rgb_scan: bool
     half_frame: bool
     half_frame_profile: Optional[dict] = None  # {crop_rect, split_x, gutter_thickness}
+    half_frame_overrides: Optional[dict] = None  # {base_hash: {crop_rect, split_x, gutter_thickness}}
     hot_folder: bool = False
 
 
@@ -312,6 +316,7 @@ class AppController(QObject):
     rgb_scan_mode_changed = pyqtSignal(bool)  # the mode changed from somewhere other than its button
     zone_arm_changed = pyqtSignal(object)  # armed zone, or None
     asset_discovery_requested = pyqtSignal(AssetDiscoveryTask)
+    auto_detect_all_splits_requested = pyqtSignal(AutoDetectAllSplitsTask)
     library_search_requested = pyqtSignal(LibrarySearchTask)
     library_search_finished = pyqtSignal(int)  # frames found (0 = nothing matched)
     library_cleared = pyqtSignal()  # roots forgotten elsewhere — the panel must re-read them
@@ -692,6 +697,8 @@ class AppController(QObject):
         self.discovery_worker.error.connect(self._on_render_error)
         self.discovery_worker.error.connect(self._on_discovery_batch_error)
         self.discovery_worker.rgb_grouped.connect(self._on_rgb_grouped)
+        self.auto_detect_all_splits_requested.connect(self.discovery_worker.process_auto_detect_all_splits)
+        self.discovery_worker.splits_detected.connect(self._on_splits_detected)
         self.library_search_requested.connect(self.library_worker.search)
         self.library_worker.progress.connect(self._on_library_walk_progress)
         self.library_worker.finished.connect(self._on_library_search_finished)
@@ -971,6 +978,7 @@ class AppController(QObject):
             rgb_scan=bool(self.session.repo.get_global_setting("rgbscan_mode", False)),
             half_frame=bool(self.session.repo.get_global_setting("half_frame_mode", False)),
             half_frame_profile=self.half_frame_profile(),
+            half_frame_overrides=self.half_frame_overrides(),
             hot_folder=hot_folder,
         )
         if self._discovery_running:
@@ -1015,6 +1023,7 @@ class AppController(QObject):
             restore_stitches=stitches,
             restore_hdr=merges,
             half_frame_profile=request.half_frame_profile,
+            half_frame_overrides=request.half_frame_overrides,
         )
         self.asset_discovery_requested.emit(task)
 
@@ -1175,31 +1184,106 @@ class AppController(QObject):
     # ── half-frame split & crop profile ─────────────────────────────────
 
     _HALF_FRAME_PROFILE_KEY = "half_frame_profile"
+    _HALF_FRAME_OVERRIDES_KEY = "half_frame_overrides"
 
     def half_frame_profile(self) -> dict | None:
         """Saved ``(crop_rect, split_x, gutter_thickness)`` profile, shared across
-        every half-frame split. Scanner-independent — the same crop/split applies
-        whether the scans came from a SANE scanner, a camera copy-stand, or a
-        folder import."""
+        every half-frame split that has no override of its own. Scanner-independent —
+        the same crop/split applies whether the scans came from a SANE scanner, a
+        camera copy-stand, or a folder import."""
         return self.session.repo.get_global_setting(self._HALF_FRAME_PROFILE_KEY, default=None)
 
     def save_half_frame_profile(self, crop_rect, split_x: float, gutter_thickness: float) -> None:
         self.session.repo.save_global_setting(
             self._HALF_FRAME_PROFILE_KEY,
-            {
-                "crop_rect": list(crop_rect),
-                "split_x": float(split_x),
-                "gutter_thickness": float(gutter_thickness),
-            },
+            {"crop_rect": list(crop_rect), "split_x": float(split_x), "gutter_thickness": float(gutter_thickness)},
         )
 
-    def open_half_frame_dialog(self, file_path: str) -> dict | None:
-        """Open the half-frame split & crop editor on one scan; return the profile
-        dict on Apply, None on cancel."""
+    def half_frame_overrides(self) -> dict:
+        """Per-file ``(crop_rect, split_x, gutter_thickness)`` overrides, keyed by
+        base file hash — for the odd frame the roll-wide profile (auto-detected or
+        fixed) still gets wrong."""
+        return dict(self.session.repo.get_global_setting(self._HALF_FRAME_OVERRIDES_KEY, default=None) or {})
+
+    def half_frame_override(self, file_hash: str) -> dict | None:
+        return self.half_frame_overrides().get(file_hash)
+
+    def save_half_frame_override(self, file_hash: str, crop_rect, split_x: float, gutter_thickness: float) -> None:
+        overrides = self.half_frame_overrides()
+        overrides[file_hash] = {"crop_rect": list(crop_rect), "split_x": float(split_x), "gutter_thickness": float(gutter_thickness)}
+        self.session.repo.save_global_setting(self._HALF_FRAME_OVERRIDES_KEY, overrides)
+
+    def clear_half_frame_override(self, file_hash: str) -> None:
+        overrides = self.half_frame_overrides()
+        if file_hash in overrides:
+            del overrides[file_hash]
+            self.session.repo.save_global_setting(self._HALF_FRAME_OVERRIDES_KEY, overrides)
+
+    def _path_for_base_hash(self, file_hash: str) -> str:
+        return next((a["path"] for a in self.session.state.uploaded_files if base_hash(a.get("hash", "")) == file_hash), "")
+
+    def _half_frame_geometry_for(self, file_hash: str, file_path: str = "") -> HalfGeometry:
+        """This file's currently effective half geometry: its own override, else the
+        roll's saved profile, else — with no profile yet — the same per-file
+        auto-detect discovery falls back to."""
+        saved = self.half_frame_override(file_hash) or self.half_frame_profile()
+        if saved is not None:
+            cr = saved.get("crop_rect")
+            return HalfGeometry(
+                crop_rect=tuple(cr) if cr is not None else None,
+                split_x=float(saved.get("split_x") or 0.5),
+                gutter_thickness=float(saved.get("gutter_thickness") or 0.0),
+            )
+        if file_path:
+            from negpy.services.assets.half_frame import detect_split_x_for_file
+
+            return HalfGeometry(split_x=detect_split_x_for_file(file_path))
+        return HalfGeometry()
+
+    def _remap_half_frame_edits(self, file_hash: str, old_geom: HalfGeometry, new_geom: HalfGeometry) -> None:
+        """Re-anchor both halves' saved manual edits from ``old_geom`` to ``new_geom``,
+        so a heal stroke, dust spot, scratch line or dodge/burn mask stays on the same
+        physical film location when the split or crop moves."""
+        if old_geom == new_geom:
+            return
+        path = self._path_for_base_hash(file_hash)
+        for half in (1, 2):
+            h = half_hash(file_hash, half)
+            saved = self.session.repo.load_file_settings(h)
+            if saved is None:
+                continue
+            updated = remap_workspace_config(saved, half, old_geom, new_geom)
+            if updated == saved:
+                continue
+            self.session.push_external_history(h, saved, updated)
+            self.session.repo.save_file_settings(h, updated, file_path=path)
+
+    _HALF_FRAME_APPLY_SCOPE_KEY = "half_frame_apply_scope"
+
+    def open_half_frame_dialog(
+        self,
+        file_path: str,
+        file_hash: str,
+        selected_hashes: Optional[List[str]] = None,
+        initial_scope: Optional[str] = None,
+    ) -> dict | None:
+        """Open the half-frame split & crop editor on one scan, seeded from
+        ``file_hash``'s own effective geometry; on Apply, save the result and
+        return it, or None on cancel.
+
+        The dialog's own Apply split-button picks what gets written: its current
+        choice — ``"current"`` (``file_hash``'s own override), ``"selected"`` (the
+        same override on every hash in ``selected_hashes``) or ``"all"`` (the
+        roll-wide profile, which every file without its own override inherits) —
+        is read back after Apply and remembered as the next default, unless
+        ``initial_scope`` pins one (the per-frame context menu always starts at
+        ``"current"``, regardless of what was last used elsewhere). Either way,
+        each affected file's manual edits are re-anchored from its old effective
+        geometry to the new one first, so they stay put across the change.
+        """
         import numpy as np
 
         from negpy.desktop.view.widgets.half_frame_dialog import HalfFrameDialog
-        from negpy.services.assets.half_frame import detect_split_x
         from negpy.services.assets.thumbnails import decode_source_image
 
         try:
@@ -1211,27 +1295,88 @@ class AppController(QObject):
             self.set_status(f"Could not load preview: {e}")
             return None
 
-        saved = self.half_frame_profile()
-        initial_rect = tuple(saved["crop_rect"]) if saved else None
-        initial_split = saved["split_x"] if saved else detect_split_x(buf)
-        initial_gutter = saved["gutter_thickness"] if saved else 0.0
-
+        old_geom = self._half_frame_geometry_for(file_hash, file_path)
+        saved_scope = initial_scope or self.session.repo.get_global_setting(self._HALF_FRAME_APPLY_SCOPE_KEY, "current")
         dialog = HalfFrameDialog(
             buf,
-            initial_rect=initial_rect,
-            initial_split=initial_split,
-            initial_gutter=initial_gutter,
+            initial_rect=old_geom.crop_rect,
+            initial_split=old_geom.split_x,
+            initial_gutter=old_geom.gutter_thickness,
+            initial_scope=saved_scope,
             parent=None,
         )
-        if dialog.exec():
-            profile = {
-                "crop_rect": list(dialog.crop_rect()),
-                "split_x": dialog.split_x(),
-                "gutter_thickness": dialog.gutter_thickness(),
-            }
-            self.save_half_frame_profile(profile["crop_rect"], profile["split_x"], profile["gutter_thickness"])
-            return profile
-        return None
+        if not dialog.exec():
+            return None
+
+        scope = dialog.scope()
+        self.session.repo.save_global_setting(self._HALF_FRAME_APPLY_SCOPE_KEY, scope)
+        cx1, cy1, cx2, cy2 = dialog.crop_rect()
+        result = {
+            "crop_rect": [cx1, cy1, cx2, cy2],
+            "split_x": dialog.split_x(),
+            "gutter_thickness": dialog.gutter_thickness(),
+        }
+        new_geom = HalfGeometry((cx1, cy1, cx2, cy2), result["split_x"], result["gutter_thickness"])
+
+        if scope == "all":
+            overrides = self.half_frame_overrides()
+            targets: set[str] = set()
+            for a in self.session.state.uploaded_files:
+                h = None if is_composite(a) else base_hash(a["hash"])
+                if h and h not in overrides:
+                    targets.add(h)
+            for h in targets:
+                self._remap_half_frame_edits(h, self._half_frame_geometry_for(h, self._path_for_base_hash(h)), new_geom)
+            self.save_half_frame_profile(result["crop_rect"], result["split_x"], result["gutter_thickness"])
+        else:
+            scoped_targets = selected_hashes if scope == "selected" and selected_hashes else [file_hash]
+            for h in scoped_targets:
+                self._remap_half_frame_edits(h, self._half_frame_geometry_for(h, self._path_for_base_hash(h)), new_geom)
+                self.save_half_frame_override(h, result["crop_rect"], result["split_x"], result["gutter_thickness"])
+        return result
+
+    def auto_detect_all_half_frame_splits(self) -> None:
+        """Re-find the gutter on every loaded scan, off the GUI thread — a one-shot
+        batch instead of adjusting each odd frame by hand. ``_on_splits_detected``
+        saves the results once detection finishes."""
+        targets: dict[str, str] = {}
+        for a in self.session.state.uploaded_files:
+            h = None if is_composite(a) else base_hash(a["hash"])
+            if h:
+                targets[h] = a["path"]
+        paths = list(targets.values())
+        if not paths:
+            return
+        self.set_status(f"Auto-detecting the split on {len(paths)} frame{'s' if len(paths) != 1 else ''}…")
+        self.status_progress_requested.emit(0, len(paths))
+        self.auto_detect_all_splits_requested.emit(AutoDetectAllSplitsTask(paths=paths))
+
+    def _on_splits_detected(self, detected: dict[str, float]) -> None:
+        """AutoDetectAllSplitsTask finished: save each file's own detected split as
+        its override, re-anchoring its manual edits from whatever geometry it used
+        before."""
+        self.status_progress_requested.emit(0, 0)
+        seen: set[str] = set()
+        for a in self.session.state.uploaded_files:
+            if is_composite(a) or a.get("path") not in detected:
+                continue
+            file_hash = base_hash(a["hash"])
+            if not file_hash or file_hash in seen:
+                continue
+            seen.add(file_hash)
+            old_geom = self._half_frame_geometry_for(file_hash, a["path"])
+            new_geom = replace(old_geom, split_x=detected[a["path"]])
+            self._remap_half_frame_edits(file_hash, old_geom, new_geom)
+            self.save_half_frame_override(
+                file_hash, new_geom.crop_rect or (0.0, 0.0, 1.0, 1.0), new_geom.split_x, new_geom.gutter_thickness
+            )
+        if not seen:
+            return
+        self.set_status(f"Auto-detected the split on {len(seen)} frame{'s' if len(seen) != 1 else ''}")
+        files = self.session.state.uploaded_files
+        self.request_asset_discovery(
+            [f["path"] for f in files if "path" in f], replace_existing=True, reselect_path=self.state.current_file_path
+        )
 
     def _on_discovery_progress(self, current: int, total: int, name: str) -> None:
         self.set_status(f"HASHING {current}/{total}: {name}")
@@ -1455,20 +1600,15 @@ class AppController(QObject):
         """(asset dict with the split geometry stamped on, half configs) for a diptych.
 
         A whole-frame asset never went through `_expand_half_frames`, so the split comes
-        from the saved profile — the same one the halves were cut with.
+        from this file's own effective geometry — its override if it has one, else the
+        saved profile, else auto-detected — the same resolution the halves were cut with.
         """
         pair = self.diptych_pair(file_info)
         if pair is None:
             return file_info, None
-        profile = self.half_frame_profile() or {}
-        raw_rect = profile.get("crop_rect")
+        geom = self._half_frame_geometry_for(file_info.get("hash") or "", file_info.get("path", ""))
         return (
-            {
-                **file_info,
-                "split_x": float(profile.get("split_x") or 0.5),
-                "crop_rect": tuple(float(v) for v in raw_rect) if raw_rect else None,
-                "gutter_thickness": float(profile.get("gutter_thickness") or 0.0),
-            },
+            {**file_info, "split_x": geom.split_x, "crop_rect": geom.crop_rect, "gutter_thickness": geom.gutter_thickness},
             pair,
         )
 
