@@ -386,50 +386,6 @@ class ScanSidebar(QWidget):
         self.exposure_label.setVisible(False)
         self.exposure_row_widget.setVisible(False)
 
-        self.framing_header = section_subheader("FRAMING")
-        self.form.addRow(self.framing_header)
-
-        # Which frames the batch scans, for roll and strip feeders only.
-        self.frame_spec_edit = QLineEdit()
-        self.frame_spec_edit.setPlaceholderText("All Frames")
-        self.frame_spec_edit.setToolTip("Frames to scan: 1-6 or 1,2,5. Empty scans every frame.")
-        self.frame_spec_label = QLabel("Frames")
-        self.form.addRow(self.frame_spec_label, self.frame_spec_edit)
-        self.frame_spec_label.setVisible(False)
-        self.frame_spec_edit.setVisible(False)
-
-        # Scan window (strip/roll feeders): set once from a preview, reused per frame.
-        self.scan_window_widget = QWidget()
-        scan_window_row = QHBoxLayout(self.scan_window_widget)
-        scan_window_row.setContentsMargins(0, 0, 0, 0)
-        self.scan_window_btn = labeled_action("", "Set Scan Window…", "Preview a frame and set the scan window reused for every frame")
-        self.scan_window_clear_btn = labeled_action("", "Clear", "Scan the whole default frame instead")
-        scan_window_row.addWidget(self.scan_window_btn, 1)
-        scan_window_row.addWidget(self.scan_window_clear_btn)
-        self.scan_window_row_label = QLabel("Batch")
-        self.form.addRow(self.scan_window_row_label, self.scan_window_widget)
-        self.scan_window_status = hint_label("")
-        self.form.addRow("", self.scan_window_status)
-        self.scan_window_row_label.setVisible(False)
-        self.scan_window_widget.setVisible(False)
-        self.scan_window_status.setVisible(False)
-
-        # Prescan + crop (Plustek SE): low-DPI full window → interactive crop → scan_window.
-        self.prescan_widget = QWidget()
-        prescan_row = QHBoxLayout(self.prescan_widget)
-        prescan_row.setContentsMargins(0, 0, 0, 0)
-        self.prescan_btn = labeled_action("", "Prescan…", "Scan a low-DPI preview and set the crop for the next scan")
-        self.prescan_clear_btn = labeled_action("", "Clear", "Scan the full window instead of a crop")
-        prescan_row.addWidget(self.prescan_btn, 1)
-        prescan_row.addWidget(self.prescan_clear_btn)
-        self.prescan_label = QLabel("Prescan")
-        self.form.addRow(self.prescan_label, self.prescan_widget)
-        self.prescan_status = hint_label("")
-        self.form.addRow("", self.prescan_status)
-        self.prescan_label.setVisible(False)
-        self.prescan_widget.setVisible(False)
-        self.prescan_status.setVisible(False)
-
         self.output_header = section_subheader("OUTPUT")
         self.form.addRow(self.output_header)
 
@@ -456,7 +412,7 @@ class ScanSidebar(QWidget):
         # ── FRAMING (bottom, right above Scan) ───────────────
         # These are the last decisions before pressing Scan, not a settings-form field among
         # Film/Quality/Output — full width, not squeezed into the form's shared label column.
-        self.framing_header = section_subheader("Framing")
+        self.framing_header = section_subheader("FRAMING")
         layout.addWidget(self.framing_header)
 
         # Which frames the batch scans, for roll and strip feeders only.
@@ -465,7 +421,7 @@ class ScanSidebar(QWidget):
         frame_spec_row.setSpacing(6)
         self.frame_spec_label = QLabel("Frames")
         self.frame_spec_edit = QLineEdit()
-        self.frame_spec_edit.setPlaceholderText("All frames")
+        self.frame_spec_edit.setPlaceholderText("All Frames")
         self.frame_spec_edit.setToolTip("Frames to scan: 1-6 or 1,2,5. Empty scans every frame.")
         frame_spec_row.addWidget(self.frame_spec_label)
         frame_spec_row.addWidget(self.frame_spec_edit, 1)
@@ -481,11 +437,8 @@ class ScanSidebar(QWidget):
         self.scan_window_widget = QWidget()
         scan_window_btn_row = QHBoxLayout(self.scan_window_widget)
         scan_window_btn_row.setContentsMargins(0, 0, 0, 0)
-        self.scan_window_btn = QPushButton("Set scan window…")
-        self.scan_window_btn.setToolTip("Preview a frame and set the scan window reused for every frame")
-        self.scan_window_clear_btn = QPushButton("Clear")
-        self.scan_window_clear_btn.setFixedWidth(56)
-        self.scan_window_clear_btn.setToolTip("Scan the whole default frame instead")
+        self.scan_window_btn = labeled_action("", "Set Scan Window…", "Preview a frame and set the scan window reused for every frame")
+        self.scan_window_clear_btn = labeled_action("", "Clear", "Scan the whole default frame instead")
         scan_window_btn_row.addWidget(self.scan_window_btn, 1)
         scan_window_btn_row.addWidget(self.scan_window_clear_btn)
         scan_window_row.addWidget(self.scan_window_row_label)
@@ -504,11 +457,8 @@ class ScanSidebar(QWidget):
         self.prescan_widget = QWidget()
         prescan_row = QHBoxLayout(self.prescan_widget)
         prescan_row.setContentsMargins(0, 0, 0, 0)
-        self.prescan_btn = QPushButton("Prescan")
-        self.prescan_btn.setToolTip("Scan a low-DPI preview and set the crop for the next scan")
-        self.prescan_clear_btn = QPushButton("Clear")
-        self.prescan_clear_btn.setFixedWidth(56)
-        self.prescan_clear_btn.setToolTip("Scan the full window instead of a crop")
+        self.prescan_btn = labeled_action("", "Prescan…", "Scan a low-DPI preview and set the crop for the next scan")
+        self.prescan_clear_btn = labeled_action("", "Clear", "Scan the full window instead of a crop")
         prescan_row.addWidget(self.prescan_btn, 1)
         prescan_row.addWidget(self.prescan_clear_btn)
         layout.addWidget(self.prescan_widget)

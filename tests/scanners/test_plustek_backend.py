@@ -433,6 +433,20 @@ def test_n_passes_rejects_out_of_range_value(monkeypatch):
     scanner.scan.assert_not_called()
 
 
+def test_n_passes_rejects_below_minimum(monkeypatch):
+    _patch_enum(monkeypatch)
+    scanner = _fake_scanner()
+    monkeypatch.setattr(f"{_BACKEND}.Scanner.open", _FakeOpen(scanner))
+    with pytest.raises(RuntimeError, match="n_passes"):
+        PlustekBackend().scan(
+            _DEVICE_ID,
+            _params(n_passes=0),
+            lambda *_: None,
+            threading.Event(),
+        )
+    scanner.scan.assert_not_called()
+
+
 def test_ir_and_multi_pass_together_is_rejected(monkeypatch):
     _patch_enum(monkeypatch)
     scanner = _fake_scanner()

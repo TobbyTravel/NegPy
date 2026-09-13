@@ -174,9 +174,9 @@ def _validate_params(params: ScanParams, *, model: Any | None = None) -> None:
     mode = params.multi_exposure_mode
     if mode != MultiExposureMode.OFF and model is not None and not getattr(model, "exposure_long", None):
         raise RuntimeError(f"{getattr(model, 'model', 'device')} does not support multi-exposure")
+    if not (MIN_N_PASSES <= params.n_passes <= MAX_N_PASSES):
+        raise RuntimeError(f"n_passes={params.n_passes} out of range ({MIN_N_PASSES}-{MAX_N_PASSES})")
     if params.n_passes > 1:
-        if not (MIN_N_PASSES <= params.n_passes <= MAX_N_PASSES):
-            raise RuntimeError(f"n_passes={params.n_passes} out of range ({MIN_N_PASSES}-{MAX_N_PASSES})")
         if model is not None and not getattr(model, "scan_ready", False):
             raise RuntimeError(f"{getattr(model, 'model', 'device')} does not support Multi-Pass")
         if params.capture_ir:
