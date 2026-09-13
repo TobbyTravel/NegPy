@@ -6,6 +6,7 @@ import wgpu  # type: ignore
 from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QColor, QPalette
 from PyQt6.QtWidgets import QVBoxLayout, QWidget
+from negpy.desktop.view.styles.theme import THEME
 from rendercanvas.pyqt6 import RenderCanvas
 
 from negpy.infrastructure.display.color_mgmt import get_display_lut
@@ -23,11 +24,11 @@ class GPUCanvasWidget(QWidget):
         self.layout().setContentsMargins(0, 0, 0, 0)
 
         self.canvas = RenderCanvas(parent=self)
-        self.canvas.setStyleSheet("background-color: #050505;")
+        self.canvas.setStyleSheet(f"background-color: {THEME.canvas_bg_black};")
         self.layout().addWidget(self.canvas)
 
         pal = self.palette()
-        pal.setColor(QPalette.ColorRole.Window, QColor("#050505"))
+        pal.setColor(QPalette.ColorRole.Window, QColor(THEME.canvas_bg_black))
         self.setPalette(pal)
         self.setAutoFillBackground(True)
 
@@ -468,26 +469,37 @@ class GPUCanvasWidget(QWidget):
                 ),
             )
 
-            bind_group = self.device.create_bind_group(
-                layout=self.bind_group_layout,
-                entries=[
-                    {"binding": 0, "resource": self.current_texture_view},
-                    {
-                        "binding": 1,
-                        "resource": {
-                            "buffer": self.uniform_buffer,
-                            "offset": 0,
-                            "size": 48,
+            try:
+                bind_group = self.device.create_bind_group(
+                    layout=self.bind_group_layout,
+                    entries=[
+                        {"binding": 0, "resource": self.current_texture_view},
+                        {
+                            "binding": 1,
+                            "resource": {
+                                "buffer": self.uniform_buffer,
+                                "offset": 0,
+                                "size": 48,
+                            },
                         },
-                    },
-                    {"binding": 2, "resource": self.lut_view},
-                    {"binding": 3, "resource": self.lut_sampler},
-                ],
-            )
+                        {"binding": 2, "resource": self.lut_view},
+                        {"binding": 3, "resource": self.lut_sampler},
+                    ],
+                )
+            except (RuntimeError, wgpu.GPUError) as exc:
+                # The engine's texture pool can destroy a size it no longer needs (e.g. a
+                # border/crop change resizes the paper texture) one render generation after
+                # update_texture() last handed this widget a view onto it. A stray repaint
+                # (resize/expose) landing in that window would otherwise raise here; skip
+                # this one frame like the swapchain-unavailable case above -- the next real
+                # frame calls update_texture() with a fresh view and self-heals.
+                logger.debug("stale texture view during draw: %s", exc)
+                bind_group = None
 
-            pass_enc.set_pipeline(self.render_pipeline)
-            pass_enc.set_bind_group(0, bind_group)
-            pass_enc.draw(4, 1, 0, 0)
+            if bind_group is not None:
+                pass_enc.set_pipeline(self.render_pipeline)
+                pass_enc.set_bind_group(0, bind_group)
+                pass_enc.draw(4, 1, 0, 0)
 
         pass_enc.end()
         self.device.queue.submit([enc.finish()])

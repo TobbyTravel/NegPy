@@ -20,7 +20,14 @@ from PyQt6.QtWidgets import (
 
 from negpy.kernel.system.text import count_of, human_bytes
 from negpy.desktop.view.sidebar.base import install_wheel_guards
-from negpy.desktop.view.styles.templates import StatusStrip, hint_label, icon_button as _icon_button, section_subheader
+from negpy.desktop.view.styles.templates import (
+    hint_label,
+    icon_button as _icon_button,
+    labeled_action,
+    SCAN_BUTTON_HEIGHT,
+    section_subheader,
+    StatusStrip,
+)
 from negpy.desktop.view.styles.theme import THEME
 from negpy.infrastructure.scanners.base import ScannerCapabilities, ScannerDevice
 from negpy.infrastructure.scanners.params import (
@@ -201,7 +208,7 @@ class ScanSidebar(QWidget):
 
     def _init_ui(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(THEME.space_xl, 0, THEME.space_xl, 5)
+        layout.setContentsMargins(0, 0, 0, 5)
         layout.setSpacing(THEME.space_lg)
 
         # ── DEVICE ───────────────────────────────────────────
@@ -253,7 +260,7 @@ class ScanSidebar(QWidget):
         self.form = QFormLayout()
         self.form.setSpacing(6)
 
-        self.film_header = section_subheader("Film")
+        self.film_header = section_subheader("FILM")
         self.form.addRow(self.film_header)
 
         # What is on the film: it decides which way the frame boundaries read on a strip, and
@@ -274,7 +281,7 @@ class ScanSidebar(QWidget):
         self.film_format_label.setVisible(False)
         self.format_combo.setVisible(False)
 
-        self.quality_header = section_subheader("Quality")
+        self.quality_header = section_subheader("QUALITY")
         self.form.addRow(self.quality_header)
 
         self.dpi_combo = QComboBox()
@@ -379,7 +386,51 @@ class ScanSidebar(QWidget):
         self.exposure_label.setVisible(False)
         self.exposure_row_widget.setVisible(False)
 
-        self.output_header = section_subheader("Output")
+        self.framing_header = section_subheader("FRAMING")
+        self.form.addRow(self.framing_header)
+
+        # Which frames the batch scans, for roll and strip feeders only.
+        self.frame_spec_edit = QLineEdit()
+        self.frame_spec_edit.setPlaceholderText("All Frames")
+        self.frame_spec_edit.setToolTip("Frames to scan: 1-6 or 1,2,5. Empty scans every frame.")
+        self.frame_spec_label = QLabel("Frames")
+        self.form.addRow(self.frame_spec_label, self.frame_spec_edit)
+        self.frame_spec_label.setVisible(False)
+        self.frame_spec_edit.setVisible(False)
+
+        # Scan window (strip/roll feeders): set once from a preview, reused per frame.
+        self.scan_window_widget = QWidget()
+        scan_window_row = QHBoxLayout(self.scan_window_widget)
+        scan_window_row.setContentsMargins(0, 0, 0, 0)
+        self.scan_window_btn = labeled_action("", "Set Scan Window…", "Preview a frame and set the scan window reused for every frame")
+        self.scan_window_clear_btn = labeled_action("", "Clear", "Scan the whole default frame instead")
+        scan_window_row.addWidget(self.scan_window_btn, 1)
+        scan_window_row.addWidget(self.scan_window_clear_btn)
+        self.scan_window_row_label = QLabel("Batch")
+        self.form.addRow(self.scan_window_row_label, self.scan_window_widget)
+        self.scan_window_status = hint_label("")
+        self.form.addRow("", self.scan_window_status)
+        self.scan_window_row_label.setVisible(False)
+        self.scan_window_widget.setVisible(False)
+        self.scan_window_status.setVisible(False)
+
+        # Prescan + crop (Plustek SE): low-DPI full window → interactive crop → scan_window.
+        self.prescan_widget = QWidget()
+        prescan_row = QHBoxLayout(self.prescan_widget)
+        prescan_row.setContentsMargins(0, 0, 0, 0)
+        self.prescan_btn = labeled_action("", "Prescan…", "Scan a low-DPI preview and set the crop for the next scan")
+        self.prescan_clear_btn = labeled_action("", "Clear", "Scan the full window instead of a crop")
+        prescan_row.addWidget(self.prescan_btn, 1)
+        prescan_row.addWidget(self.prescan_clear_btn)
+        self.prescan_label = QLabel("Prescan")
+        self.form.addRow(self.prescan_label, self.prescan_widget)
+        self.prescan_status = hint_label("")
+        self.form.addRow("", self.prescan_status)
+        self.prescan_label.setVisible(False)
+        self.prescan_widget.setVisible(False)
+        self.prescan_status.setVisible(False)
+
+        self.output_header = section_subheader("OUTPUT")
         self.form.addRow(self.output_header)
 
         self.fmt_combo = QComboBox()
@@ -472,9 +523,9 @@ class ScanSidebar(QWidget):
 
         self.scan_btn = QPushButton(" Scan")
         self.scan_btn.setObjectName("scan_btn")
-        self.scan_btn.setFixedHeight(40)
+        self.scan_btn.setFixedHeight(SCAN_BUTTON_HEIGHT)
         self.scan_btn.setProperty("scanning", "false")
-        self.scan_btn.setIcon(qta.icon("fa5s.camera-retro", color="#FFFFFF"))
+        self.scan_btn.setIcon(qta.icon("fa5s.camera-retro", color=THEME.text_on_accent))
         layout.addWidget(self.scan_btn)
 
         layout.addStretch()
@@ -1367,7 +1418,7 @@ class ScanSidebar(QWidget):
         self.status_strip.set_message(f"Error: {text}")
         # Unsupported pyOpticfilm models: status alone is easy to miss.
         if "cannot scan with pyOpticfilm" in text:
-            QMessageBox.warning(self, "Scan failed", text)
+            QMessageBox.warning(self, "Scan Failed", text)
 
     @pyqtSlot(bool)
     def _on_ejected(self, triggered: bool) -> None:
@@ -1407,7 +1458,7 @@ class ScanSidebar(QWidget):
             self.prescan_btn.setEnabled(False)
         else:
             self.scan_btn.setText(" Scan")
-            self.scan_btn.setIcon(qta.icon("fa5s.camera-retro", color="#FFFFFF"))
+            self.scan_btn.setIcon(qta.icon("fa5s.camera-retro", color=THEME.text_on_accent))
             self.prescan_btn.setEnabled(True)
             self.status_strip.stop_progress()
         # The filled/hollow swap is a QSS property selector, and Qt only re-reads those on a
