@@ -1,5 +1,5 @@
 from dataclasses import replace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from negpy.desktop.session import AppState
 from negpy.desktop.view.sidebar.process import ProcessSidebar
@@ -349,3 +349,56 @@ def test_white_black_point_write_to_process(qapp):
 
     args, _kwargs = controller.apply_config.call_args
     assert args[0].process.white_point_offset == 0.15
+
+
+def test_reanalyze_frame_clears_local_bounds_and_persists(qapp):
+    controller, sidebar = _sidebar()
+    cfg = controller.state.config
+    controller.state.config = replace(cfg, process=replace(cfg.process, local_floors=(0.1, 0.1, 0.1), local_ceils=(0.9, 0.9, 0.9)))
+    sidebar.sync_ui()
+
+    sidebar.reanalyze_frame_btn.click()
+
+    new_cfg = controller.apply_config.call_args.args[0]
+    assert not new_cfg.process.is_local_initialized
+    assert controller.apply_config.call_args.kwargs == {"persist": True}
+
+
+def test_reanalyze_frame_is_disabled_when_nothing_would_be_measured(qapp):
+    controller, sidebar = _sidebar()
+    cfg = controller.state.config
+    sidebar.sync_ui()
+    assert sidebar.reanalyze_frame_btn.isEnabled()
+
+    controller.state.config = replace(cfg, process=replace(cfg.process, lock_bounds=True))
+    sidebar.sync_ui()
+    assert not sidebar.reanalyze_frame_btn.isEnabled()
+
+    controller.state.config = replace(cfg, process=replace(cfg.process, use_luma_average=True, use_color_average=True))
+    sidebar.sync_ui()
+    assert not sidebar.reanalyze_frame_btn.isEnabled()
+
+
+def test_baseline_hint_names_where_the_bounds_came_from(qapp):
+    from negpy.services.assets import rolls
+
+    controller, sidebar = _sidebar()
+    cfg = controller.state.config
+    riding = dict(use_luma_average=True, locked_floors=(0.1, 0.1, 0.1), locked_ceils=(0.9, 0.9, 0.9))
+
+    sidebar.sync_ui()
+    assert not sidebar.baseline_source_hint.isVisibleTo(sidebar)
+
+    controller.state.config = replace(cfg, process=replace(cfg.process, baseline_source="frame:f003.tif", **riding))
+    sidebar.sync_ui()
+    assert sidebar.baseline_source_hint.isVisibleTo(sidebar)
+    assert sidebar.baseline_source_hint.text() == "Baseline: Frame “f003.tif”"
+
+    with patch.object(rolls, "roll_for_id", return_value={"name": "Tri-X"}):
+        controller.state.config = replace(cfg, process=replace(cfg.process, baseline_source="roll:r1", **riding))
+        sidebar.sync_ui()
+    assert sidebar.baseline_source_hint.text() == "Baseline: Roll “Tri-X”"
+
+    controller.state.config = replace(cfg, process=replace(cfg.process, use_color_average=True))
+    sidebar.sync_ui()
+    assert sidebar.baseline_source_hint.text().startswith("No baseline yet")

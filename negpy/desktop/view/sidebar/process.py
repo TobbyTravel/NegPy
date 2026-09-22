@@ -1,4 +1,5 @@
 import math
+from dataclasses import replace
 
 import numpy as np
 import qtawesome as qta
@@ -13,7 +14,8 @@ from PyQt6.QtWidgets import (
 from negpy.desktop.session import ToolMode
 from negpy.desktop.view.sidebar.base import BaseSidebar
 from negpy.desktop.view.sidebar.tone import _CH_COLORS, _CH_LABEL, _CH_SUFFIX
-from negpy.desktop.view.styles.templates import ICON_BUTTON_WIDTH, field_label, hint_label, section_subheader, wrap_tooltip
+from negpy.desktop.view.styles.templates import ICON_BUTTON_WIDTH, field_label, hint_label, section_subheader, set_hint_kind, wrap_tooltip
+from negpy.services.assets import rolls
 from negpy.desktop.view.styles.theme import THEME
 from negpy.desktop.view.widgets.sliders import CompactSlider
 from negpy.features.exposure.models import EXPOSURE_CONSTANTS
@@ -185,7 +187,13 @@ class ProcessSidebar(BaseSidebar):
         analysis_col.addWidget(section_subheader("ANALYSIS"))
 
         self.analysis_buffer_slider = CompactSlider("Analysis Buffer", 0.0, 0.25, conf.analysis_buffer)
-        analysis_col.addWidget(self.analysis_buffer_slider)
+        self.reanalyze_frame_btn = self._icon_action(
+            "fa5s.redo", "Reanalyze Frame — measure this frame's bounds again from its current crop and analysis settings"
+        )
+        buffer_row = QHBoxLayout()
+        buffer_row.addWidget(self.analysis_buffer_slider, 1)
+        buffer_row.addWidget(self.reanalyze_frame_btn)
+        analysis_col.addLayout(buffer_row)
 
         self.analysis_region_btn = self._tool_toggle(
             "fa5s.vector-square",
@@ -244,6 +252,8 @@ class ProcessSidebar(BaseSidebar):
         # Which baseline each axis' bounds come from: the roll's shared meter (picked in
         # Roll Baseline above) or the frame's own analysis. Sits under the picker it reads,
         # not with the analysis controls.
+        self.baseline_source_hint = hint_label("")
+        self.layout.addWidget(self.baseline_source_hint)
         avg_row = QHBoxLayout()
         self.use_luma_avg_btn = self._small_toggle(
             "mdi6.film",
@@ -350,6 +360,7 @@ class ProcessSidebar(BaseSidebar):
         self.autodetect_btn.toggled.connect(lambda c: self.controller.toggle_autodetect(c))
         self.lock_bounds_btn.toggled.connect(self._on_lock_bounds_toggled)
 
+        self.reanalyze_frame_btn.clicked.connect(self._on_reanalyze_frame)
         self.analysis_buffer_slider.valueChanged.connect(lambda v: self._on_buffer_changed(v, persist=False))
         self.analysis_buffer_slider.valueCommitted.connect(lambda v: self._on_buffer_changed(v, persist=True))
         self.analysis_buffer_slider.dragStarted.connect(lambda: self.controller.analysis_buffer_drag_changed.emit(True))
@@ -443,6 +454,23 @@ class ProcessSidebar(BaseSidebar):
             **invalidate_local_bounds(self.state.config.process),
         )
         self.controller.analysis_buffer_preview_requested.emit(val)
+
+    def _update_baseline_source_hint(self, conf, transfer: bool) -> None:
+        """Names the baseline the average axes read; hidden while neither axis rides one."""
+        riding = (conf.use_luma_average or conf.use_color_average) and not transfer
+        self.baseline_source_hint.setVisible(riding)
+        if not riding:
+            return
+        if conf.is_locked_initialized:
+            set_hint_kind(self.baseline_source_hint, "muted")
+            self.baseline_source_hint.setText(f"Baseline: {rolls.baseline_label(self.controller.session.repo, conf)}")
+        else:
+            set_hint_kind(self.baseline_source_hint, "warning")
+            self.baseline_source_hint.setText("No baseline yet: this frame uses its own analysis until Roll Analysis runs")
+
+    def _on_reanalyze_frame(self) -> None:
+        conf = self.state.config
+        self.controller.apply_config(replace(conf, process=replace(conf.process, **invalidate_local_bounds(conf.process))), persist=True)
 
     def _on_luma_range_clip_changed(self, val: float, persist: bool = True) -> None:
         self.controller.set_roll_default(
@@ -541,8 +569,10 @@ class ProcessSidebar(BaseSidebar):
                 self.luma_range_clip_slider,
                 self.color_range_clip_slider,
                 self.lock_bounds_btn,
+                self.reanalyze_frame_btn,
             ):
                 w.setVisible(not transfer)
+            self._update_baseline_source_hint(conf, transfer)
 
             idx = self._channel_index()
             suffix = _CH_LABEL[idx]
@@ -568,6 +598,8 @@ class ProcessSidebar(BaseSidebar):
             # matters only when at least one axis still analyzes locally, and a freehand analysis
             # region overrides it entirely.
             self.analysis_buffer_slider.setEnabled(not locked and not has_region and not (conf.use_luma_average and conf.use_color_average))
+            # A frame riding the roll on both axes never reads its own bounds, so there is nothing to re-measure.
+            self.reanalyze_frame_btn.setEnabled(not locked and not (conf.use_luma_average and conf.use_color_average))
             self.luma_range_clip_slider.setEnabled(not locked and not conf.use_luma_average)
             self.color_range_clip_slider.setEnabled(not locked and not conf.use_color_average)
         finally:

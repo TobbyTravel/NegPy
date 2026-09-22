@@ -2,12 +2,24 @@
 scope or duplicate the edits themselves, with one exception: roll-wide defaults for a
 handful of film, rig and scanning facts (see TestRollDefaults below)."""
 
+from dataclasses import replace
 from unittest.mock import MagicMock
 
 from negpy.domain.models import ProcessConfig, WorkspaceConfig
 from negpy.features.process.models import DemosaicMode, ProcessMode
 from negpy.infrastructure.storage.repository import StorageRepository
 from negpy.services.assets.rolls import (
+    add_to_scene,
+    baseline_label,
+    create_scene,
+    delete_scene,
+    next_scene_name,
+    remove_from_scenes,
+    rename_scene,
+    roll_scenes,
+    scene_by_hash,
+    scene_normalization,
+    set_scene_normalization,
     add_extra_member,
     all_rolls_sorted,
     create_virtual_roll,
@@ -20,6 +32,7 @@ from negpy.services.assets.rolls import (
     recognize_folder,
     rename_folder_roll_disk,
     rename_roll,
+    resolve_roll_baseline,
     resolve_roll_config,
     roll_defaults,
     section_push,
@@ -511,7 +524,7 @@ class TestSectionPush:
 
 
 class TestRollNormalization:
-    """A roll's own Batch Analysis baseline: written only by Batch Analysis itself, read
+    """A roll's own Roll Analysis baseline: written only by Roll Analysis itself, read
     by any frame's Use Luma/Color Average axes -- unlike ROLL_DEFAULT_FIELDS, this has no
     lock/override of its own."""
 
@@ -557,3 +570,156 @@ class TestRollNormalization:
 
         assert roll_normalization(repo, roll_a) is not None
         assert roll_normalization(repo, roll_b) is None
+
+
+class TestScenes:
+    def _roll(self):
+        repo = _repo()
+        return repo, create_virtual_roll(repo, "Portra", [])
+
+    def test_create_lists_scene_with_members_and_no_baseline(self):
+        repo, roll_id = self._roll()
+        sid = create_scene(repo, roll_id, "Beach", ["a", "b", "a"])
+
+        assert roll_scenes(repo, roll_id) == [(sid, {"name": "Beach", "member_hashes": ["a", "b"], "normalization": None})]
+        assert scene_normalization(repo, roll_id, sid) is None
+
+    def test_frame_is_in_one_scene_only(self):
+        repo, roll_id = self._roll()
+        first = create_scene(repo, roll_id, "Beach", ["a", "b"])
+        second = create_scene(repo, roll_id, "Night", ["b", "c"])
+
+        assert scene_by_hash(repo, roll_id) == {"a": (1, first, "Beach"), "b": (2, second, "Night"), "c": (2, second, "Night")}
+
+    def test_emptied_scene_is_dropped(self):
+        repo, roll_id = self._roll()
+        create_scene(repo, roll_id, "Beach", ["a"])
+        night = create_scene(repo, roll_id, "Night", ["a", "b"])
+
+        assert [sid for sid, _e in roll_scenes(repo, roll_id)] == [night]
+
+    def test_add_moves_frame_and_keeps_ordinals(self):
+        repo, roll_id = self._roll()
+        beach = create_scene(repo, roll_id, "Beach", ["a", "b"])
+        night = create_scene(repo, roll_id, "Night", ["c"])
+        add_to_scene(repo, roll_id, beach, ["c"])
+        add_to_scene(repo, roll_id, beach, ["b"])
+
+        assert [sid for sid, _e in roll_scenes(repo, roll_id)] == [beach]
+        assert scene_by_hash(repo, roll_id)["c"] == (1, beach, "Beach")
+        assert night not in dict(roll_scenes(repo, roll_id))
+
+    def test_add_to_later_scene_keeps_earlier_ordinal(self):
+        repo, roll_id = self._roll()
+        beach = create_scene(repo, roll_id, "Beach", ["a", "b"])
+        night = create_scene(repo, roll_id, "Night", ["c"])
+        add_to_scene(repo, roll_id, night, ["b"])
+
+        assert scene_by_hash(repo, roll_id) == {"a": (1, beach, "Beach"), "c": (2, night, "Night"), "b": (2, night, "Night")}
+
+    def test_remove_rename_dissolve(self):
+        repo, roll_id = self._roll()
+        sid = create_scene(repo, roll_id, "Beach", ["a", "b"])
+        remove_from_scenes(repo, roll_id, ["a"])
+        rename_scene(repo, roll_id, sid, "Shore")
+        assert scene_by_hash(repo, roll_id) == {"b": (1, sid, "Shore")}
+
+        delete_scene(repo, roll_id, sid)
+        assert roll_scenes(repo, roll_id) == []
+
+    def test_normalization_round_trip(self):
+        repo, roll_id = self._roll()
+        sid = create_scene(repo, roll_id, "Beach", ["a"])
+        set_scene_normalization(repo, roll_id, sid, (0.1, 0.2, 0.3), (0.7, 0.8, 0.9))
+
+        assert scene_normalization(repo, roll_id, sid) == {"floors": (0.1, 0.2, 0.3), "ceils": (0.7, 0.8, 0.9)}
+        assert roll_normalization(repo, roll_id) is None
+
+    def test_unknown_roll_is_a_noop(self):
+        repo = _repo()
+        assert create_scene(repo, "nope", "Beach", ["a"]) is None
+        assert roll_scenes(repo, None) == []
+        assert scene_by_hash(repo, None) == {}
+        assert saved_rolls(repo) == {}
+
+    def test_next_scene_name_skips_taken(self):
+        repo, roll_id = self._roll()
+        assert next_scene_name(repo, roll_id) == "Scene 1"
+        create_scene(repo, roll_id, "Scene 2", ["a"])
+        assert next_scene_name(repo, roll_id) == "Scene 3"
+
+
+class TestResolveRollBaseline:
+    def _riding(self, **process):
+        cfg = WorkspaceConfig()
+        return replace(cfg, process=replace(cfg.process, use_luma_average=True, use_color_average=True, **process))
+
+    def test_frame_without_a_baseline_takes_the_rolls(self):
+        repo = _repo()
+        roll_id = create_virtual_roll(repo, "Portra", [])
+        set_roll_normalization(repo, roll_id, (0.1, 0.1, 0.1), (0.9, 0.9, 0.9))
+
+        out = resolve_roll_baseline(repo, roll_id, "h1", self._riding())
+
+        assert out.process.locked_floors == (0.1, 0.1, 0.1)
+        assert out.process.locked_ceils == (0.9, 0.9, 0.9)
+
+    def test_scene_member_takes_the_scenes(self):
+        repo = _repo()
+        roll_id = create_virtual_roll(repo, "Portra", [])
+        set_roll_normalization(repo, roll_id, (0.1, 0.1, 0.1), (0.9, 0.9, 0.9))
+        sid = create_scene(repo, roll_id, "Beach", ["h1"])
+        set_scene_normalization(repo, roll_id, sid, (0.2, 0.2, 0.2), (0.8, 0.8, 0.8))
+
+        assert resolve_roll_baseline(repo, roll_id, "h1", self._riding()).process.locked_floors == (0.2, 0.2, 0.2)
+
+    def test_existing_baseline_off_axes_and_locked_frames_are_left_alone(self):
+        repo = _repo()
+        roll_id = create_virtual_roll(repo, "Portra", [])
+        set_roll_normalization(repo, roll_id, (0.1, 0.1, 0.1), (0.9, 0.9, 0.9))
+        own = self._riding(locked_floors=(0.3, 0.3, 0.3), locked_ceils=(0.7, 0.7, 0.7))
+        off = WorkspaceConfig()
+        locked = self._riding(lock_bounds=True)
+
+        for cfg in (own, off, locked):
+            assert resolve_roll_baseline(repo, roll_id, "h1", cfg) is cfg
+
+    def test_unanalyzed_roll_leaves_the_frame_alone(self):
+        repo = _repo()
+        roll_id = create_virtual_roll(repo, "Portra", [])
+        cfg = self._riding()
+        assert resolve_roll_baseline(repo, roll_id, "h1", cfg) is cfg
+
+
+class TestBaselineLabel:
+    def _process(self, source, roll_name=None):
+        return replace(ProcessConfig(), baseline_source=source, roll_name=roll_name)
+
+    def test_names_roll_scene_and_frame_live(self):
+        repo = _repo()
+        roll_id = create_virtual_roll(repo, "Portra", [])
+        sid = create_scene(repo, roll_id, "Beach", ["h1"])
+        rename_scene(repo, roll_id, sid, "Shore")
+
+        assert baseline_label(repo, self._process(f"roll:{roll_id}")) == "Roll “Portra”"
+        assert baseline_label(repo, self._process(f"scene:{sid}")) == "Scene “Shore”"
+        assert baseline_label(repo, self._process("frame:f003.tif")) == "Frame “f003.tif”"
+
+    def test_legacy_and_deleted_sources(self):
+        repo = _repo()
+        assert baseline_label(repo, self._process("", roll_name="Tri-X")) == "Roll “Tri-X”"
+        assert baseline_label(repo, self._process("")) == "a saved baseline"
+        assert baseline_label(repo, self._process("roll:gone")) == "a deleted roll"
+        assert baseline_label(repo, self._process("scene:gone")) == "a deleted scene"
+
+    def test_filled_baseline_records_its_source(self):
+        repo = _repo()
+        roll_id = create_virtual_roll(repo, "Portra", [])
+        set_roll_normalization(repo, roll_id, (0.1, 0.1, 0.1), (0.9, 0.9, 0.9))
+        sid = create_scene(repo, roll_id, "Beach", ["h1"])
+        set_scene_normalization(repo, roll_id, sid, (0.2, 0.2, 0.2), (0.8, 0.8, 0.8))
+        cfg = WorkspaceConfig()
+        cfg = replace(cfg, process=replace(cfg.process, use_luma_average=True))
+
+        assert resolve_roll_baseline(repo, roll_id, "h1", cfg).process.baseline_source == f"scene:{sid}"
+        assert resolve_roll_baseline(repo, roll_id, "h2", cfg).process.baseline_source == f"roll:{roll_id}"

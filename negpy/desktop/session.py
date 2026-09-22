@@ -564,6 +564,8 @@ class AssetListModel(QAbstractListModel):
             summary = composite_summary(file_info)
             if summary:
                 lines.append(summary)
+            if file_info.get("scene"):
+                lines.append(f"Scene: {file_info['scene'][2]}")
             if asset_thumbnail_key(file_info) in self._state.stale_thumbnails:
                 lines.append("Thumbnail predates a settings change; open the frame to refresh it.")
             return "\n".join(lines)
@@ -1149,7 +1151,8 @@ class DesktopSessionManager(QObject):
         if roll_id is None:
             return config
         file_hash = unforked_hash(asset["hash"])
-        return rolls.resolve_roll_config(self.repo, roll_id, file_hash, config)
+        config = rolls.resolve_roll_config(self.repo, roll_id, file_hash, config)
+        return rolls.resolve_roll_baseline(self.repo, roll_id, file_hash, config)
 
     def _hydrate_asset_config(self, asset: dict) -> tuple[WorkspaceConfig, bool]:
         """Build an asset's effective config and report whether it had saved edits."""
@@ -1272,6 +1275,21 @@ class DesktopSessionManager(QObject):
         self.asset_model.refresh()
         self.files_changed.emit()
 
+    def _stamp_scenes(self) -> None:
+        by_hash = rolls.scene_by_hash(self.repo, self.state.active_roll_id)
+        for f in self.state.uploaded_files:
+            hit = by_hash.get(unforked_hash(f["hash"]))
+            if hit:
+                f["scene"] = hit
+            else:
+                f.pop("scene", None)
+
+    def refresh_scene_marks(self) -> None:
+        """Re-reads the active roll's scenes onto the loaded frames after a scene edit."""
+        self._stamp_scenes()
+        self.asset_model.refresh()
+        self.files_changed.emit()
+
     def sync_selected_settings(self, rows, bounds_flags: tuple[bool, bool] = (False, False), scope: str = "selection") -> int:
         """
         Apply the active frame's chosen settings to other frames. Returns the count changed.
@@ -1294,6 +1312,9 @@ class DesktopSessionManager(QObject):
             if src_bounds is None:
                 self.settings_synced.emit("Render the source frame before syncing bounds")
                 return 0
+            # A source riding a baseline passes that baseline on, so its origin goes with it.
+            rides = src_bounds == (source_config.process.locked_floors, source_config.process.locked_ceils)
+            src_source = source_config.process.baseline_source if rides else f"frame:{os.path.basename(self.state.current_file_path or '')}"
 
         target_indices = self.asset_model.visible_actual_indices_ordered() if scope == "roll" else self.state.selected_indices
 
@@ -1308,7 +1329,7 @@ class DesktopSessionManager(QObject):
             synced = apply_selected_fields(source_config, target_config, rows)
             if src_bounds is not None:
                 floors, ceils = src_bounds
-                changes: dict = {"locked_floors": floors, "locked_ceils": ceils}
+                changes: dict = {"locked_floors": floors, "locked_ceils": ceils, "baseline_source": src_source}
                 if luma:
                     changes["use_luma_average"] = True
                 if color:
@@ -1881,6 +1902,7 @@ class DesktopSessionManager(QObject):
             m = marks.get(unforked_hash(f["hash"]))
             f["keeper"] = m == "keeper"
             f["excluded"] = m == "excluded"
+        self._stamp_scenes()
 
         self.asset_model.refresh()
         self.files_changed.emit()
