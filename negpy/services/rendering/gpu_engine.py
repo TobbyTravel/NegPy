@@ -17,6 +17,7 @@ from negpy.features.exposure import models as exposure_models
 from negpy.features.exposure.normalization import (
     LogNegativeBounds,
     analyze_log_exposure_bounds_from_log,
+    blend_neutral_axis,
     contrast_mask_plane,
     luma_source_bounds,
     normalized_roi,
@@ -67,7 +68,7 @@ from negpy.features.exposure.transfer import (
 )
 from negpy.features.process.capture_color import apply_camera_matrix, camera_to_working_matrix
 from negpy.features.process.logic import should_fold_camera_wb
-from negpy.features.process.models import ProcessMode, per_channel_point_offsets
+from negpy.features.process.models import ProcessMode, per_channel_point_offsets, pooled_neutral_axis
 from negpy.infrastructure.gpu.device import GPUDevice
 from negpy.infrastructure.gpu.resources import GPUBuffer, GPUTexture
 from negpy.infrastructure.gpu.shader_loader import ShaderLoader
@@ -214,6 +215,8 @@ def _analysis_cache_key(settings: WorkspaceConfig, analysis_source_hash: str) ->
         p.crosstalk_strength,
         p.crosstalk_matrix,
         p.crosstalk_process,
+        p.use_cast_average,
+        p.locked_neutral_axis,
         g.rotation,
         g.flip_horizontal,
         g.flip_vertical,
@@ -844,6 +847,9 @@ class GPUEngine:
         if needs_axis and axis_grid is not None:
             axis_bounds = LogNegativeBounds(*transfer_bounds()) if transfer else bounds
             neutral_axis_refs = measure_neutral_axis_from_log(axis_grid, axis_bounds, None, 0.0)
+            pooled_axis = pooled_neutral_axis(settings.process)
+            if pooled_axis is not None:
+                neutral_axis_refs = blend_neutral_axis(neutral_axis_refs, pooled_axis)
 
         # Auto Density/Auto Grade meter the working-space grid against the fixed window on
         # a Positive frame, exactly like the neutral axis just above; both read the

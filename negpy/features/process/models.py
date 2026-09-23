@@ -133,6 +133,11 @@ class ProcessConfig:
     locked_ceils: tuple[float, float, float] = (0.0, 0.0, 0.0)
     local_floors: tuple[float, float, float] = (0.0, 0.0, 0.0)
     local_ceils: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    # Roll/scene Cast Removal: the pooled neutral axis in raw log, in the meter's own shape
+    # (midtone, shadow, highlight or None, confidence) plus an offset weight
+    # (pool_neutral_axis). Color Negative only.
+    use_cast_average: bool = False
+    locked_neutral_axis: Optional[tuple] = None
 
     white_point_offset: float = 0.0
     black_point_offset: float = 0.0
@@ -188,6 +193,8 @@ class ProcessConfig:
         object.__setattr__(self, "locked_ceils", tuple(self.locked_ceils))
         object.__setattr__(self, "local_floors", tuple(self.local_floors))
         object.__setattr__(self, "local_ceils", tuple(self.local_ceils))
+        if self.locked_neutral_axis is not None:
+            object.__setattr__(self, "locked_neutral_axis", neutral_axis_tuple(self.locked_neutral_axis))
         if self.crosstalk_matrix is not None:
             object.__setattr__(self, "crosstalk_matrix", tuple(self.crosstalk_matrix))
         if self.sensor_matrix is not None:
@@ -204,6 +211,20 @@ class ProcessConfig:
     def is_locked_initialized(self) -> bool:
         """Checks if a roll-wide baseline is available."""
         return any(v != 0.0 for v in self.locked_floors)
+
+
+def neutral_axis_tuple(axis) -> tuple:
+    """A neutral axis read back from JSON as nested tuples; a pooled one carries a fifth
+    element, its offset weight."""
+    mid, shadow, highlight, *scalars = axis
+    return (tuple(mid), tuple(shadow), tuple(highlight) if highlight is not None else None, *(float(v) for v in scalars))
+
+
+def pooled_neutral_axis(process: ProcessConfig) -> Optional[tuple]:
+    """The roll/scene neutral axis this frame renders Cast Removal with, or None to meter its own."""
+    if process.use_cast_average and process.process_mode == ProcessMode.C41:
+        return process.locked_neutral_axis
+    return None
 
 
 def invalidate_local_bounds(process: ProcessConfig) -> dict:

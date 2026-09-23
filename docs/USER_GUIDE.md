@@ -131,7 +131,7 @@ Right-click a roll for:
 
 *   **Rename…**: a folder roll also offers **Also rename the folder on disk** (unticked by default, asked each time). NegPy refuses with a warning if a sibling has that name or permission is missing. Inside a cloud-sync folder (Dropbox, iCloud, OneDrive), the sync can treat a rename as delete and re-upload.
 *   **Delete…**: forgets the roll record only; folder, images and edits stay. **Clear Library** in *Manage Database* forgets all rolls.
-*   **Roll Analysis** (**loaded** roll only): runs Roll Analysis on every frame outside a scene ([§10.5](#105-roll-analysis)) and stores it as the roll's baseline, for any frame's **Use Luma Average** / **Use Color Average**, in this roll or another.
+*   **Roll Analysis** (**loaded** roll only): runs Roll Analysis on every frame outside a scene ([§10.5](#105-roll-analysis)) and stores it as the roll's baseline, for any frame's **Use average** toggles, in this roll or another.
 
 #### Rolls that are not folders
 
@@ -392,7 +392,7 @@ Color timing, like enlarger dichroic filters. **Global / Shadows / Highlights** 
 *   **Reset** (undo-arrow icon): set the region's temperature and CMY to neutral.
 *   **Temperature**: warm-to-cool lever on the magenta/yellow pair; cyan stays put.
 *   **Cyan / Magenta / Yellow** (-1 to 1): Cyan↔Red, Magenta↔Green, Yellow↔Blue.
-*   **Cast Removal** (0.0 to 1.0, **color only**): balances each layer against the frame's own grays so neutrals stay neutral from shadows to highlights; strength scales with how many clean near-neutrals the frame has. On Color Negative it removes the **orange mask** and starts at about 0.5. On Transparency it starts at 0 and corrects a faded slide's crossover (a slide's cast can be the photograph). For other slide color use **Temperature**, the CMY sliders or **Hue Trim** (§10.3). Hidden for B&W Negative.
+*   **Cast Removal** (0.0 to 1.0, **color only**): balances each layer against the frame's own grays so neutrals stay neutral from shadows to highlights; strength scales with how many clean near-neutrals the frame has. On Color Negative it removes the **orange mask** and starts at 1.0. On Transparency it starts at 0 and corrects a faded slide's crossover (a slide's cast can be the photograph). For other slide color use **Temperature**, the CMY sliders or **Hue Trim** (§10.3). Hidden for B&W Negative.
 *   **Ring-around** (target icon, or `Shift+F`): a 5×5 mosaic in 2cc steps to ±4cc on magenta and yellow, centered on neutral, so rings compare across frames. Each patch renders the part of the frame it covers; click one to keep its filtration. `Escape` or a second press clears it; any edit drops it. See **Rotating a proof** below.
 
 <!-- panel:tone -->
@@ -751,14 +751,15 @@ A change re-detects every following frame cropped by **Auto**. Hand-drawn crops 
 <!-- panel:baseline -->
 ### 10.5 Roll Analysis
 
-Meter the roll once and share the result, so frames of one film match. **Use Luma Average** and **Use Color Average** are this card's roll defaults.
+Meter the roll once and share the result, so frames of one film match. The **Use average** toggles are this card's roll defaults.
 
-*   **Use Luma Average**: take the picked roll's tonal range; color stays per frame. Disables Luma Range Clip.
-*   **Use Color Average**: take the picked roll's color balance; tonal range stays per frame. Disables Color Clip. Both on gives a consistent roll; both off gives per-image auto-exposure.
+*   **Use average: Luma**: take the picked roll's tonal range; color stays per frame. Disables Luma Range Clip.
+*   **Use average: Color**: take the picked roll's color balance; tonal range stays per frame. Disables Color Clip. Luma and Color on gives a consistent roll; both off gives per-image auto-exposure.
+*   **Use average: Cast** (**Color Negative** only): take Cast Removal's gray balance from the roll or scene analysis instead of this frame's own grays. The film's color curve is the same on every frame; each frame keeps only as much of its own color level as the analysis found real differences between frames, so a scene under one light renders alike. Roll and Scene Analysis turn it on, except on frames far from the rest; grayed out until an analysis has run.
 *   **Baseline** (line shown while either average is on): names the roll or scene analyzed, or the frame **Sync Bounds…** took it from, and warns when there is none.
 *   **Rolls** (picker): search every roll in your library; a ticked roll has a saved baseline. Defaults to the loaded roll. Picking one loads its baseline at once; a different ticked roll shows a hint that its baseline belongs to that roll.
-*   **Reanalyze** (gauge, beside the picker): runs Roll Analysis on the loaded roll (also on the Library's roll list, [§2](#2-film-strip-left-panel)): averages density and color balance over every loaded frame outside a scene and saves it as the roll's baseline. Locked frames are skipped. A frame whose color is far from the rest keeps its own exposure and color (**Use Luma Average** and **Use Color Average** off); the status message names these frames. *(Tip: run Auto Crop **Roll** first, in **Image only** mode, for consistent crops.)* Grayed out on a roll that is not loaded.
-*   **Use This Frame** (crosshairs, beside the picker): saves this frame's bounds as the roll's baseline, for a reference frame. Frames outside a scene with **Use Luma Average** / **Use Color Average** follow it; locked frames are skipped. A frame opened later with no baseline takes its scene's, else the roll's. Grayed out on a roll that is not loaded; on an unrendered frame it says there are no bounds yet.
+*   **Reanalyze** (gauge, beside the picker): runs Roll Analysis on the loaded roll (also on the Library's roll list, [§2](#2-film-strip-left-panel)): averages density and color balance over every loaded frame outside a scene and saves it as the roll's baseline. Locked frames are skipped. A frame whose color is far from the rest keeps its own exposure and color (**Use average** off); the status message names these frames. *(Tip: run Auto Crop **Roll** first, in **Image only** mode, for consistent crops.)* Grayed out on a roll that is not loaded.
+*   **Use This Frame** (crosshairs, beside the picker): saves this frame's bounds as the roll's baseline, for a reference frame. Frames outside a scene with **Use average: Luma** / **Color** follow it; locked frames are skipped. A frame opened later with no baseline takes its scene's, else the roll's. Grayed out on a roll that is not loaded; on an unrendered frame it says there are no bounds yet.
 *   **Scenes**: lists the loaded roll's [scenes](#scenes) with number, color, frame count and a tick once analyzed. **Analyze** runs Scene Analysis (Reanalyze over the scene's frames only, saved on the scene). **Select** selects its frames in the Film Strip. **Delete** (trash) forgets it after asking. Roll Analysis and a picked roll baseline skip scene frames.
 
 <!-- panel:process -->
