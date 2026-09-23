@@ -277,7 +277,7 @@ ROLL_DEFAULT_FIELDS: Dict[str, tuple] = {
             "hue_trim",
         ),
     ),
-    "demosaic": ("process", ("demosaic_preview", "demosaic_export")),
+    "demosaic": ("process", ("demosaic_preview", "demosaic_export", "highlight_reconstruction")),
     "process": (
         "process",
         (
@@ -285,14 +285,22 @@ ROLL_DEFAULT_FIELDS: Dict[str, tuple] = {
             "analysis_buffer",
             "luma_range_clip",
             "color_range_clip",
-            # Which baseline this frame's bounds come from -- the roll's shared meter or
-            # its own auto-analysis -- is the same "roll vs. this frame" choice as the
-            # rest of this card's fields, unlike locked_floors/locked_ceils themselves,
-            # which stay Roll Analysis's own job to spread (a metering run, not an edit).
-            "use_luma_average",
-            "use_color_average",
+            # Film-base (Dmin) and Dmax corrections, per dye layer: a fact of the stock
+            # and its development, not of one frame.
+            "white_point_offset",
+            "black_point_offset",
+            "white_point_trim_red",
+            "white_point_trim_green",
+            "white_point_trim_blue",
+            "black_point_trim_red",
+            "black_point_trim_green",
+            "black_point_trim_blue",
         ),
     ),
+    # Which baseline this frame's bounds come from -- the roll's shared meter or its own
+    # analysis. locked_floors/locked_ceils themselves stay Roll Analysis's own job to
+    # spread (a metering run, not an edit).
+    "baseline": ("process", ("use_luma_average", "use_color_average")),
     # The film edge, the rebate width and the format's shape are properties of the roll,
     # not of one frame. The rect autocrop finds from them is not: it stays each frame's own.
     "autocrop": ("geometry", ("autocrop_mode", "autocrop_offset", "autocrop_rebate_trim", "autocrop_ratio")),

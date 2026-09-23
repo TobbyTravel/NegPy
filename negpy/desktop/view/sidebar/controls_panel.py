@@ -6,7 +6,7 @@ from PyQt6.QtCore import QTimer, pyqtSignal
 
 from negpy.desktop.controller import AppController
 from negpy.desktop.view.shortcut_registry import tooltip_with_shortcut
-from negpy.desktop.view.styles.templates import hint_label, set_hint_kind, wrap_tooltip
+from negpy.desktop.view.styles.templates import hint_label, section_subheader, set_hint_kind, wrap_tooltip
 from negpy.desktop.view.widgets.collapsible import NO_ROLL_SCOPE_HINT, CollapsibleSection, make_section
 from negpy.desktop.view.widgets.charts import MiniHistogramWidget, MiniRGBHistogramWidget
 from negpy.desktop.view.styles.theme import THEME
@@ -61,6 +61,7 @@ _COLOR_FIELDS = (
 _DEMOSAIC_FIELDS = (
     "demosaic_preview",
     "demosaic_export",
+    "highlight_reconstruction",
 )
 # GeometryConfig is split across three cards. The rect auto crop resolves, the rotation
 # and the easel movements are this frame's own placement and stay on Geometry; what the
@@ -95,25 +96,20 @@ _SENSOR_FIELDS = (
     "crosstalk_strength",
     "hue_trim",
 )
-# ProcessConfig is split across four cards. Each tuple is both the card's reset scope and
+# ProcessConfig is split across five cards. Each tuple is both the card's reset scope and
 # its modified count, so a field is resettable from the one card that counts it.
 # locked_floors/locked_ceils are in none: they are Roll Analysis's measured result.
 _FILM_FIELDS = (
     "process_mode",
     "positive_source",
 )
-_NORMALIZATION_FIELDS = (
+_METERING_FIELDS = (
     "analysis_buffer",
     "analysis_rect",
     "lock_bounds",
     "luma_range_clip",
     "color_range_clip",
     "e6_normalize",
-    "use_luma_average",
-    "use_color_average",
-)
-# Normalization's White/Black Point block: counted and reset with that card, never a roll default.
-_WHITE_BLACK_POINT_FIELDS = (
     "white_point_offset",
     "black_point_offset",
     "white_point_trim_red",
@@ -122,6 +118,10 @@ _WHITE_BLACK_POINT_FIELDS = (
     "black_point_trim_red",
     "black_point_trim_green",
     "black_point_trim_blue",
+)
+_BASELINE_FIELDS = (
+    "use_luma_average",
+    "use_color_average",
 )
 _TONE_FIELDS = (
     "density",
@@ -203,6 +203,9 @@ _APPLY_FIELDS: dict[str, tuple | None] = {
 
 _AUTO_METER_FIELDS = ("auto_exposure", "auto_normalize_contrast")
 
+# Roll-tab sections that drive more than one roll card, keyed by section key.
+_SECTION_CARDS: dict[str, tuple[str, ...]] = {"optics": ("lens", "flatfield")}
+
 
 def _default_exposure_field(field: str, positive_source: bool, process_mode: str):
     """The value *field* defaults to on this frame. Auto Density/Auto Grade default
@@ -242,14 +245,6 @@ class ControlsPanel(QWidget):
             icon_name="fa5s.magic",
         )
 
-        self.flatfield_sidebar = FlatFieldSidebar(self.controller)
-        self.flatfield_section = self._make_section(
-            "Flat Field",
-            "flatfield",
-            self.flatfield_sidebar,
-            icon_name="fa5s.adjust",
-        )
-
         self.geometry_sidebar = GeometrySidebar(self.controller)
         self.geometry_section = self._make_section(
             "Geometry",
@@ -259,18 +254,30 @@ class ControlsPanel(QWidget):
         )
 
         self.autocrop_sidebar = AutocropSidebar(self.controller)
+        # The persisted "autocrop" section key stays.
         self.autocrop_section = self._make_section(
-            "Auto Crop",
+            "Crop",
             "autocrop",
             self.autocrop_sidebar,
-            icon_name="fa5s.magic",
+            icon_name="fa5s.crop-alt",
         )
 
+        # The scanning optics: lens warp and light falloff. One card, still two roll cards
+        # (_SECTION_CARDS), since each lives on its own config section.
         self.lens_sidebar = LensSidebar(self.controller)
-        self.lens_section = self._make_section(
-            "Lens Correction",
-            "lens",
-            self.lens_sidebar,
+        self.flatfield_sidebar = FlatFieldSidebar(self.controller)
+        optics_body = QWidget()
+        optics_layout = QVBoxLayout(optics_body)
+        optics_layout.setContentsMargins(0, 0, 0, 0)
+        optics_layout.setSpacing(THEME.space_sm)
+        optics_layout.addWidget(section_subheader("LENS CORRECTION"))
+        optics_layout.addWidget(self.lens_sidebar)
+        optics_layout.addWidget(section_subheader("FLAT FIELD CORRECTION"))
+        optics_layout.addWidget(self.flatfield_sidebar)
+        self.optics_section = self._make_section(
+            "Optics",
+            "optics",
+            optics_body,
             icon_name="fa5s.circle-notch",
         )
 
@@ -284,41 +291,52 @@ class ControlsPanel(QWidget):
             icon_name="mdi6.film",
             collapsible=False,
         )
-        # How the files become frames, which is upstream of every rig card below.
+        # How the files become frames: Trichrome is a rig flag and Half Frame a roll's own
+        # state, so neither has a scope pair.
         self.trichrome_sidebar = TrichromeSidebar(self.controller)
-        self.trichrome_section = self._make_section(
-            "Trichrome",
-            "trichrome",
-            self.trichrome_sidebar,
-            icon_name="mdi.google-circles-communities",
-        )
-
         self.half_frame_sidebar = HalfFrameSidebar(self.controller)
-        self.half_frame_section = self._make_section(
-            "Half Frame",
-            "half_frame",
-            self.half_frame_sidebar,
+        assembly_body = QWidget()
+        assembly_layout = QVBoxLayout(assembly_body)
+        assembly_layout.setContentsMargins(0, 0, 0, 0)
+        assembly_layout.setSpacing(THEME.space_lg)
+        assembly_layout.addWidget(self.trichrome_sidebar)
+        assembly_layout.addWidget(self.half_frame_sidebar)
+        self.assembly_section = self._make_section(
+            "Frame Assembly",
+            "assembly",
+            assembly_body,
             icon_name="mdi.view-split-vertical",
         )
 
+        # Where this frame's bounds come from: the Use Luma/Color Average switches, then the
+        # roll and scene baselines they read.
         self.roll_sidebar = RollAnalysisSidebar(self.controller)
-        # Roll Analysis and Normalization are one job, getting a negative to a correctly
-        # normalized positive, so they share a card: this frame's own analysis first, then
-        # the roll picker it feeds, with Lock Bounds in the picker's button row because it
-        # is about this frame's relationship to Roll Analysis.
-        self.roll_sidebar.insert_lock_button(self.process_sidebar.lock_bounds_btn)
-        normalization_body = QWidget()
-        normalization_layout = QVBoxLayout(normalization_body)
-        normalization_layout.setContentsMargins(0, 0, 0, 0)
-        normalization_layout.setSpacing(4)
-        normalization_layout.addWidget(self.process_sidebar.analysis_bar)
-        normalization_layout.addWidget(self.roll_sidebar)
-        normalization_layout.addWidget(self.process_sidebar)
+        baseline_body = QWidget()
+        baseline_layout = QVBoxLayout(baseline_body)
+        baseline_layout.setContentsMargins(0, 0, 0, 0)
+        baseline_layout.setSpacing(4)
+        baseline_layout.addWidget(self.process_sidebar.baseline_bar)
+        baseline_layout.addWidget(self.roll_sidebar)
+        self.baseline_section = self._make_section(
+            "Roll Analysis",
+            "baseline",
+            baseline_body,
+            icon_name="mdi6.filmstrip",
+        )
+
+        # How this frame measures its own bounds, and what nudges the result. The persisted
+        # "process" section key stays.
+        metering_body = QWidget()
+        metering_layout = QVBoxLayout(metering_body)
+        metering_layout.setContentsMargins(0, 0, 0, 0)
+        metering_layout.setSpacing(4)
+        metering_layout.addWidget(self.process_sidebar)
+        metering_layout.addWidget(self.process_sidebar.analysis_bar)
         self.process_section = self._make_section(
-            "Normalization",
+            "Metering",
             "process",
-            normalization_body,
-            icon_name="fa5s.cogs",
+            metering_body,
+            icon_name="fa5s.tachometer-alt",
         )
 
         self.sensor_sidebar = SensorSidebar(self.controller)
@@ -332,8 +350,9 @@ class ControlsPanel(QWidget):
         )
 
         self.demosaic_sidebar = DemosaicSidebar(self.controller)
+        # The persisted "demosaic" section key stays.
         self.demosaic_section = self._make_section(
-            "Demosaic",
+            "Raw Decode",
             "demosaic",
             self.demosaic_sidebar,
             icon_name="mdi6.grid",
@@ -415,8 +434,9 @@ class ControlsPanel(QWidget):
         )
 
         # Group the sections into workflow pages (each becomes an icon tab in RightPanel). Calibration,
-        # Demosaic, Roll Analysis, Normalization and Presets are roll-wide facts, not per-frame edits --
-        # RightPanel builds them into its own top-level Roll tab instead of a page here.
+        # Demosaic, Roll Analysis and Normalization are roll-wide facts, not per-frame edits --
+        # RightPanel builds them into its own top-level Roll tab instead of a page here, and
+        # places Presets on its Favorites tab.
         groups = [
             (
                 "geometry",
@@ -549,15 +569,15 @@ class ControlsPanel(QWidget):
         self.toning_section.reset_requested.connect(lambda: self.controller.session.reset_section("toning"))
         self.geometry_section.reset_requested.connect(self._reset_geometry_fields)
         self.autocrop_section.reset_requested.connect(lambda: self._reset_card_fields("autocrop"))
-        self.lens_section.reset_requested.connect(lambda: self._reset_card_fields("lens"))
-        self.process_section.reset_requested.connect(lambda: self._reset_process_fields(_NORMALIZATION_FIELDS + _WHITE_BLACK_POINT_FIELDS))
+        self.optics_section.reset_requested.connect(self._reset_optics)
+        self.process_section.reset_requested.connect(lambda: self._reset_process_fields(_METERING_FIELDS))
+        self.baseline_section.reset_requested.connect(lambda: self._reset_process_fields(_BASELINE_FIELDS))
         self.retouch_section.reset_requested.connect(lambda: self.controller.session.reset_section("retouch"))
         self.local_section.reset_requested.connect(lambda: self.controller.session.reset_section("local"))
         self.finish_section.reset_requested.connect(lambda: self.controller.session.reset_section("finish"))
         self.film_section.reset_requested.connect(self._reset_film_fields)
         self.sensor_section.reset_requested.connect(self._reset_sensor_fields)
         self.demosaic_section.reset_requested.connect(lambda: self._reset_process_fields(_DEMOSAIC_FIELDS))
-        self.flatfield_section.reset_requested.connect(self._reset_flatfield)
 
         for key, section in self._roll_sections() + self._frame_sections():
             section.scope_selected.connect(lambda scope, k=key: self._on_scope_selected(k, scope))
@@ -994,11 +1014,11 @@ class ControlsPanel(QWidget):
         return (
             ("film", self.film_section),
             ("sensor", self.sensor_section),
-            ("demosaic", self.demosaic_section),
-            ("process", self.process_section),
             ("autocrop", self.autocrop_section),
-            ("lens", self.lens_section),
-            ("flatfield", self.flatfield_section),
+            ("baseline", self.baseline_section),
+            ("process", self.process_section),
+            ("demosaic", self.demosaic_section),
+            ("optics", self.optics_section),
         )
 
     def _sync_scope_buttons(self) -> None:
@@ -1011,9 +1031,10 @@ class ControlsPanel(QWidget):
         spans them to hold a shared one. Save as Roll gives them one."""
         has_roll = self.controller.state.active_roll_id is not None
         overridden = []
-        for card_key, section in self._roll_sections():
-            locked = self.controller.roll_card_locked(card_key)
-            label = self._ROLL_CARD_LABELS[card_key]
+        for section_key, section in self._roll_sections():
+            cards = _SECTION_CARDS.get(section_key, (section_key,))
+            locked = any(self.controller.roll_card_locked(card) for card in cards)
+            label = self._ROLL_CARD_LABELS[cards[0]]
             section.set_scope_buttons(
                 True,
                 "frame" if locked or not has_roll else "roll",
@@ -1048,7 +1069,7 @@ class ControlsPanel(QWidget):
         picker over that card's own settings. Frame on a Roll-tab card locks it here;
         a frame card is already there, so the pair's own click guard swallows it."""
         if key in dict(self._roll_sections()):
-            self.controller.set_card_scope(key, scope)
+            self.controller.set_card_scope(_SECTION_CARDS.get(key, key), scope)
             self._sync_scope_buttons()
             return
         fields = _APPLY_FIELDS[key]
@@ -1093,12 +1114,13 @@ class ControlsPanel(QWidget):
         new_proc = replace(cfg.process, **{f: getattr(_DEFAULT_PROCESS, f) for f in fields})
         self.controller.apply_config(replace(cfg, process=new_proc), persist=True)
 
-    def _reset_flatfield(self) -> None:
+    def _reset_optics(self) -> None:
+        self._reset_card_fields("lens")
         self._reset_card_fields("flatfield")
 
     def _reset_geometry_fields(self) -> None:
         """Geometry's own fields alone: a plain session.reset_section("geometry") would
-        take Auto Crop and Lens Correction with it."""
+        take Crop and Lens Correction with it."""
         from dataclasses import replace
 
         cfg = self.controller.state.config
@@ -1197,7 +1219,7 @@ class ControlsPanel(QWidget):
 
         proc = cfg.process
         film_count = sum(getattr(proc, f) != getattr(_proc, f) for f in _FILM_FIELDS)
-        process_count = sum(getattr(proc, f) != getattr(_proc, f) for f in _NORMALIZATION_FIELDS + _WHITE_BLACK_POINT_FIELDS)
+        process_count = sum(getattr(proc, f) != getattr(_proc, f) for f in _METERING_FIELDS)
         demosaic_count = sum(getattr(proc, f) != getattr(_proc, f) for f in _DEMOSAIC_FIELDS)
         sensor_count = sum(getattr(proc, f) != getattr(_proc, f) for f in _SENSOR_FIELDS)
 
@@ -1242,14 +1264,16 @@ class ControlsPanel(QWidget):
         self.toning_section.set_modified(toning_count)
         self.geometry_section.set_modified(geometry_count)
         self.autocrop_section.set_modified(autocrop_count)
-        self.lens_section.set_modified(lens_count)
-        # The picked Roll Baseline counts against Normalization, the card it sits on.
-        self.process_section.set_modified(process_count + (proc.roll_name is not None))
+        self.optics_section.set_modified(lens_count + flatfield_count)
+        self.process_section.set_modified(process_count)
+        # The picked roll counts against Roll Analysis, the card it sits on.
+        self.baseline_section.set_modified(
+            sum(getattr(proc, f) != getattr(_proc, f) for f in _BASELINE_FIELDS) + (proc.roll_name is not None)
+        )
         self.retouch_section.set_modified(retouch_count)
         # Presets and the two Scan sections stay out: they own no WorkspaceConfig fields.
         self.sensor_section.set_modified(sensor_count)
         self.demosaic_section.set_modified(demosaic_count)
-        self.flatfield_section.set_modified(flatfield_count)
         self.local_section.set_modified(len(cfg.local.masks))
         self.finish_section.set_modified(finish_count)
         for header in self.tab_headers:

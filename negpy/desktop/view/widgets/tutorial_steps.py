@@ -241,20 +241,20 @@ def build(window: "MainWindow") -> list[TutorialStep]:
             body=(
                 "Shot a negative as three separate frames under red, green and blue light? "
                 "<b>Trichrome Mode</b> merges them into one clean, low-noise color scan.<br><br>"
-                "Toggle <b>Trichrome Mode</b> on the Roll tab. Folders are grouped "
+                "Toggle <b>Trichrome Mode</b> on the Roll tab's Frame Assembly card. Folders are grouped "
                 "into triplets automatically, and <b>Edit Triplet…</b> beside the toggle "
                 "fixes the grouping. Frames are sub-pixel aligned to kill color fringing, then "
                 "run through the normal conversion."
             ),
             target=_rgbscan,
-            section_attr="trichrome_section",
+            section_attr="assembly_section",
         ),
         TutorialStep(
             title="Half Frame: Two Photos per Scan",
             body=(
                 "Shooting a half-frame camera, a Pentax 17 or an Olympus Pen? Each scan "
                 "holds <b>two photos side by side</b>.<br><br>"
-                "Toggle <b>Half Frame Mode</b> on the Roll tab and every scan appears as "
+                "Toggle <b>Half Frame Mode</b> on the Roll tab's Frame Assembly card and every scan appears as "
                 "two frames on the contact sheet, split automatically at the gutter "
                 "between them. Each half is a full citizen: its own exposure metering, "
                 "its own edits and history, its own sidecar, and exports as "
@@ -263,7 +263,7 @@ def build(window: "MainWindow") -> list[TutorialStep]:
                 "return when you switch it back on."
             ),
             target=_half_frame,
-            section_attr="half_frame_section",
+            section_attr="assembly_section",
         ),
         TutorialStep(
             title="Keep & Reject: Culling the Roll",
@@ -292,7 +292,7 @@ def build(window: "MainWindow") -> list[TutorialStep]:
                 "edges. Correct before cropping or retouching."
             ),
             target=_lens,
-            section_attr="lens_section",
+            section_attr="optics_section",
         ),
         TutorialStep(
             title="Flat Field Correction",
@@ -303,7 +303,7 @@ def build(window: "MainWindow") -> list[TutorialStep]:
                 "per image. Off by default."
             ),
             target=_flatfield,
-            section_attr="flatfield_section",
+            section_attr="optics_section",
         ),
         TutorialStep(
             title="Geometry: Crop & Straighten",
@@ -331,15 +331,15 @@ def build(window: "MainWindow") -> list[TutorialStep]:
             section_attr="geometry_section",
         ),
         TutorialStep(
-            title="Auto Crop: What the Detector Looks For",
+            title="Crop: What the Detector Looks For",
             body=(
-                "The rectangle is each frame's own, but what the detector hunts for belongs to "
-                "the rig and the roll, so it sits on its own <b>Roll tab</b> card. <b>Ratio</b> "
-                "forces a shape (on <b>Free</b> each format keeps its own), <b>Detect</b> snaps "
-                "to the nearest standard one, <b>Mode</b> picks the exposed image or the full "
-                "film edge, and <b>Crop Offset</b> and <b>Rebate Trim</b> decide how far in to "
-                "cut.<br><br>"
-                "<b>Batch Autocrop</b> does the whole roll at once. It analyses every visible "
+                "The rectangle is each frame's own, but its shape and what the detector hunts for "
+                "belong to the rig and the roll, so they sit on the <b>Roll tab</b>'s Crop card. "
+                "<b>Ratio</b> forces a shape (on <b>Free</b> each format keeps its own), "
+                "<b>Detect</b> snaps to the nearest standard one, <b>Mode</b> picks the exposed "
+                "image or the full film edge, and <b>Crop Offset</b> and <b>Rebate Trim</b> decide "
+                "how far in to cut.<br><br>"
+                "Under <b>Auto Crop</b>, <b>Frame</b> crops this frame and <b>Roll</b> does the whole roll at once. It analyses every visible "
                 "landscape frame together, letting the confident detections calibrate the weak "
                 "ones, so camera-scan crops come out consistent instead of frame-by-frame. It "
                 "runs in the background with progress and cancel, and leaves your manual crops "
@@ -918,7 +918,7 @@ def build(window: "MainWindow") -> list[TutorialStep]:
                 "stages, so there is no print look, no effects, no toning and no vignette. The "
                 "color space follows your export selection. <b>Preview Flat</b> peeks at the "
                 f"master on the canvas, also on the toolbar and on {_k('toggle_flat_peek')}, and "
-                "<b>Roll Baseline</b> keeps flat masters consistent across a roll. Standard "
+                "<b>Roll Analysis</b> keeps flat masters consistent across a roll. Standard "
                 "<b>Print</b> output is unaffected."
             ),
             target=_flat_master,

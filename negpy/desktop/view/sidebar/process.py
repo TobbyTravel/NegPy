@@ -5,7 +5,6 @@ import numpy as np
 import qtawesome as qta
 from PyQt6.QtWidgets import (
     QButtonGroup,
-    QComboBox,
     QHBoxLayout,
     QVBoxLayout,
     QWidget,
@@ -14,14 +13,13 @@ from PyQt6.QtWidgets import (
 from negpy.desktop.session import ToolMode
 from negpy.desktop.view.sidebar.base import BaseSidebar
 from negpy.desktop.view.sidebar.tone import _CH_COLORS, _CH_LABEL, _CH_SUFFIX
-from negpy.desktop.view.styles.templates import ICON_BUTTON_WIDTH, field_label, hint_label, section_subheader, set_hint_kind, wrap_tooltip
+from negpy.desktop.view.styles.templates import ICON_BUTTON_WIDTH, hint_label, section_subheader, set_hint_kind, wrap_tooltip
 from negpy.services.assets import rolls
 from negpy.desktop.view.styles.theme import THEME
 from negpy.desktop.view.widgets.sliders import CompactSlider
 from negpy.features.exposure.models import EXPOSURE_CONSTANTS
 from negpy.features.hdr.logic import output_scale
 from negpy.features.hdr.models import ANCHOR_EV_UNSET, hdr_active
-from negpy.features.process.logic import VALID_HIGHLIGHT_LEVELS
 from negpy.features.process.models import ProcessMode, invalidate_local_bounds
 
 # Luma Range Clip slider mapping: positions 0 to 100 clip the histogram tails, and
@@ -45,28 +43,6 @@ _MODES = (
     (ProcessMode.E6, " Slide", THEME.mode_e6, "Transparency — slide / reversal film"),
 )
 
-# Highlight Reconstruction dropdown: rawpy's HighlightMode, collapsed to the three settings
-# worth choosing between (see effective_highlight_reconstruction) — Reconstruct pinned to
-# libraw's own default level rather than exposing all seven numbered levels. A dropdown, not
-# a button row: this is a set-and-forget choice for a blown-highlight frame, the same niche
-# as Demosaic's own combo, not a per-frame toggle worth a row of its own real estate.
-_HIGHLIGHT_LEVELS = (
-    (0, "Off"),
-    (2, "Blend"),
-    (5, "Reconstruct"),
-)
-
-_HIGHLIGHT_TIP = (
-    "Camera RAW only, and only useful when a highlight actually clipped.<br><br>"
-    "<b>Off</b> (default) — a blown highlight stays flat white, or magenta if one channel "
-    "clipped first.<br><br>"
-    "<b>Blend</b> — a plausible neutral color from the unclipped channels. Best for a "
-    "near-neutral highlight: sun, sky, chrome, glass.<br><br>"
-    "<b>Reconstruct</b> — libraw's more aggressive default. Can miscolor a highlight that "
-    "was actually a saturated light source, since a clipped channel alone can't tell the "
-    "two apart."
-)
-
 
 def _luma_range_slider_to_value(pos: float) -> float:
     if pos >= 0:
@@ -87,23 +63,6 @@ def _color_slider_to_value(pos: float) -> float:
     ln = math.log10(_COLOR_CLIP_NEUTRAL)
     end = math.log10(_COLOR_CLIP_MAX if pos >= 0 else _COLOR_CLIP_MIN)
     return math.pow(10, ln + (abs(pos) / 100.0) * (end - ln))
-
-
-def _highlight_bucket(level: int) -> int:
-    """Which of the three exposed buttons a stored value belongs under. Off and Blend are
-    exact; any other valid level is some Reconstruct level (3-9), so it buckets there — the
-    same "an unrecognised value still lands somewhere sane" idea as DemosaicMode's
-    `_missing_`, since nothing here should leave the exclusive group with no button checked.
-
-    A value outside `VALID_HIGHLIGHT_LEVELS` (a hand-edited sidecar) buckets to Off,
-    matching `effective_highlight_reconstruction`'s own resolution — the panel must never
-    show Reconstruct armed while the decode actually clips.
-    """
-    if level not in VALID_HIGHLIGHT_LEVELS:
-        return 0
-    if level == 2:
-        return 1
-    return 2 if level else 0
 
 
 def _color_value_to_slider(v: float) -> float:
@@ -132,10 +91,6 @@ class ProcessSidebar(BaseSidebar):
 
         self.autodetect_btn = self._small_toggle("mdi6.auto-fix", "", False, "Auto-detect the film process on load")
         self.autodetect_btn.setFixedWidth(ICON_BUTTON_WIDTH)
-        header_row = QHBoxLayout()
-        header_row.addStretch(1)
-        header_row.addWidget(self.autodetect_btn)
-        mode_col.addLayout(header_row)
 
         mode_row = QHBoxLayout()
         mode_col.addLayout(mode_row)
@@ -148,6 +103,7 @@ class ProcessSidebar(BaseSidebar):
             self.mode_btn_group.addButton(btn, i)
             mode_row.addWidget(btn, 1)
             self.mode_btns.append(btn)
+        mode_row.addWidget(self.autodetect_btn)
 
         # Lives beside Film Mode, not inside Normalization: whether the source is
         # already a finished positive is a fact about the file, not a Normalization
@@ -169,7 +125,6 @@ class ProcessSidebar(BaseSidebar):
         )
         mode_col.addWidget(self.positive_source_btn)
 
-        # Adopted into the Roll Baseline button row by RollAnalysisSidebar.insert_lock_button.
         self.lock_bounds_btn = self._small_toggle(
             "fa5s.lock",
             " Lock Bounds",
@@ -178,8 +133,8 @@ class ProcessSidebar(BaseSidebar):
         )
 
         # Everything that measures this frame, or nudges what the measurement produced.
-        # Lives above the Roll Baseline picker, so ControlsPanel places it outside
-        # self.layout -- the same reason mode_bar sits above every Roll-tab card.
+        # ControlsPanel places it on the Metering card, so it sits outside self.layout --
+        # the same reason mode_bar sits above every Roll-tab card.
         self.analysis_bar = QWidget()
         analysis_col = QVBoxLayout(self.analysis_bar)
         analysis_col.setContentsMargins(0, 0, 0, 0)
@@ -205,7 +160,7 @@ class ProcessSidebar(BaseSidebar):
             "fa5s.times", " Clear Region", "Clear the freehand analysis region (fall back to the Analysis Buffer)"
         )
         region_row = QHBoxLayout()
-        for btn in (self.analysis_region_btn, self.clear_analysis_region_btn):
+        for btn in (self.analysis_region_btn, self.clear_analysis_region_btn, self.lock_bounds_btn):
             region_row.addWidget(btn, 1)
         analysis_col.addLayout(region_row)
 
@@ -240,6 +195,8 @@ class ProcessSidebar(BaseSidebar):
         for i, btn in enumerate((self.ch_global_btn, self.ch_r_btn, self.ch_g_btn, self.ch_b_btn)):
             self.ch_btn_group.addButton(btn, i)
             ch_row.addWidget(btn, 1)
+        self.point_header = section_subheader("WHITE / BLACK POINT")
+        analysis_col.addWidget(self.point_header)
         analysis_col.addLayout(ch_row)
 
         self.white_point_slider = CompactSlider("White Point", -0.25, 0.25, conf.white_point_offset, has_neutral=True)
@@ -249,11 +206,14 @@ class ProcessSidebar(BaseSidebar):
         wp_bp_row.addWidget(self.black_point_slider)
         analysis_col.addLayout(wp_bp_row)
 
-        # Which baseline each axis' bounds come from: the roll's shared meter (picked in
-        # Roll Baseline above) or the frame's own analysis. Sits under the picker it reads,
-        # not with the analysis controls.
+        # Which baseline each axis' bounds come from: the roll's shared meter or the frame's
+        # own analysis. ControlsPanel places it at the top of the Roll Analysis card.
+        self.baseline_bar = QWidget()
+        baseline_col = QVBoxLayout(self.baseline_bar)
+        baseline_col.setContentsMargins(0, 0, 0, 0)
+        baseline_col.setSpacing(THEME.space_sm)
         self.baseline_source_hint = hint_label("")
-        self.layout.addWidget(self.baseline_source_hint)
+        baseline_col.addWidget(self.baseline_source_hint)
         avg_row = QHBoxLayout()
         self.use_luma_avg_btn = self._small_toggle(
             "mdi6.film",
@@ -269,7 +229,7 @@ class ProcessSidebar(BaseSidebar):
         )
         avg_row.addWidget(self.use_luma_avg_btn)
         avg_row.addWidget(self.use_color_avg_btn)
-        self.layout.addLayout(avg_row)
+        baseline_col.addLayout(avg_row)
 
         # Render exposure for a merged bracket, continuous rather than snapped to the frames that
         # happen to have been shot. The menu still offers those and writes a frame name; this
@@ -330,29 +290,6 @@ class ProcessSidebar(BaseSidebar):
         self.layout.addWidget(self.normalize_merged_hint)
         self.layout.addWidget(self.render_ev_slider)
 
-        highlight_row = QHBoxLayout()
-        self.highlight_label = field_label("Highlight Recovery")
-        highlight_row.addWidget(self.highlight_label)
-        self.highlight_combo = QComboBox()
-        self.highlight_combo.addItems([label for _level, label in _HIGHLIGHT_LEVELS])
-        self.highlight_combo.setToolTip(wrap_tooltip(_HIGHLIGHT_TIP))
-        self.highlight_combo.setCurrentIndex(_highlight_bucket(conf.highlight_reconstruction))
-        highlight_row.addWidget(self.highlight_combo, 1)
-        self.layout.addLayout(highlight_row)
-
-        self.highlight_merged_hint = hint_label("Not applied to a merged bracket.")
-        self.highlight_merged_hint.setToolTip(
-            wrap_tooltip(
-                "A reconstructed pixel no longer reads near the sensor ceiling, so the merge's "
-                "own highlight recovery would trust a per-frame guess as real signal and blend "
-                "inconsistent guesses across frames. A bracket already recovers a genuine "
-                "highlight from a shorter, unclipped exposure, which reconstruction's guess "
-                "cannot improve on. Unmerge the frame if you need it."
-            )
-        )
-        self.highlight_merged_hint.setVisible(False)
-        self.layout.addWidget(self.highlight_merged_hint)
-
         self.layout.addStretch()
 
     def _connect_signals(self) -> None:
@@ -378,7 +315,6 @@ class ProcessSidebar(BaseSidebar):
         self.positive_source_btn.toggled.connect(self._on_positive_source_toggled)
         self.use_luma_avg_btn.toggled.connect(self._on_use_luma_average_toggled)
         self.use_color_avg_btn.toggled.connect(self._on_use_color_average_toggled)
-        self.highlight_combo.currentIndexChanged.connect(self._on_highlight_reconstruction_changed)
 
         self.white_point_slider.valueChanged.connect(lambda v: self._on_white_point_changed(v, persist=False))
         self.white_point_slider.valueCommitted.connect(lambda v: self._on_white_point_changed(v, persist=True))
@@ -399,10 +335,10 @@ class ProcessSidebar(BaseSidebar):
         return "black_point_offset" if idx == 0 else f"black_point_trim_{_CH_SUFFIX[idx - 1]}"
 
     def _on_white_point_changed(self, val: float, persist: bool = True) -> None:
-        self.update_config_section("process", persist=persist, readback_metrics=persist, **{self._wp_field(): val})
+        self.controller.set_roll_default("process", persist=persist, readback_metrics=persist, **{self._wp_field(): val})
 
     def _on_black_point_changed(self, val: float, persist: bool = True) -> None:
-        self.update_config_section("process", persist=persist, readback_metrics=persist, **{self._bp_field(): val})
+        self.controller.set_roll_default("process", persist=persist, readback_metrics=persist, **{self._bp_field(): val})
 
     def _on_lock_bounds_toggled(self, checked: bool) -> None:
         self.update_config_section("process", lock_bounds=checked, persist=True, render=False)
@@ -432,15 +368,11 @@ class ProcessSidebar(BaseSidebar):
         # The other axis re-derives per frame, so a fresh analysis is forced; roll_name
         # drops since the picked baseline no longer applies as a whole.
         self.controller.set_roll_default(
-            "process",
+            "baseline",
             roll_name=None,
             **axis,
             **invalidate_local_bounds(self.state.config.process),
         )
-
-    def _on_highlight_reconstruction_changed(self, bucket: int) -> None:
-        level, _label = _HIGHLIGHT_LEVELS[bucket]
-        self.update_config_section("process", highlight_reconstruction=level, render=True, persist=True)
 
     def _on_analysis_region_toggled(self, checked: bool) -> None:
         self.controller.set_active_tool(ToolMode.ANALYSIS_DRAW if checked else ToolMode.NONE)
@@ -522,18 +454,6 @@ class ProcessSidebar(BaseSidebar):
             self.positive_source_btn.setVisible(is_e6)
             self.positive_source_btn.setChecked(conf.positive_source)
             self.positive_source_btn.setEnabled(not conf.e6_normalize)
-
-            # Reconstruction only means anything against a slide's own blown highlights (see
-            # effective_highlight_reconstruction); hidden rather than greyed, matching Normalize
-            # and Positive right above it. Greyed instead of hidden when the source has no
-            # camera matrix (a scanner TIFF, JPEG, or other already-rendered file): the control
-            # still fits the mode, it just has no sensor CFA data left to recover from. Also
-            # greyed on a merge, same reasoning and hint as Normalize.
-            self.highlight_label.setVisible(is_e6)
-            self.highlight_combo.setVisible(is_e6)
-            self.highlight_combo.setEnabled(self.state.preview_cam_xyz is not None and not merged)
-            self.highlight_combo.setCurrentIndex(_highlight_bucket(conf.highlight_reconstruction))
-            self.highlight_merged_hint.setVisible(is_e6 and merged)
 
             # Only a merge has a render exposure to choose, and only the transfer path uses a fixed
             # window for it to mean anything against.
@@ -624,7 +544,6 @@ class ProcessSidebar(BaseSidebar):
             self.color_range_clip_slider,
             self.normalize_e6_btn,
             self.positive_source_btn,
-            self.highlight_combo,
             self.ch_btn_group,
             self.ch_global_btn,
             self.ch_r_btn,

@@ -34,18 +34,17 @@ from negpy.desktop.view.widgets.overflow_bar import OverflowBar
 # ControlsPanel sections built into the Roll tab (_build_roll_page), not a Frame sub-tab --
 # reveal_section routes these to the Roll group instead of Frame's inner tab switcher.
 # The Roll tab's cards that own settings, for its header's count, reset and apply.
-_ROLL_TAB_CARDS = ("film", "sensor", "demosaic", "process", "autocrop", "lens", "flatfield")
+_ROLL_TAB_CARDS = ("film", "sensor", "autocrop", "baseline", "process", "demosaic", "lens", "flatfield")
 
 _ROLL_SECTION_ATTRS = frozenset(
     {
-        "trichrome_section",
-        "half_frame_section",
+        "assembly_section",
         "sensor_section",
         "demosaic_section",
+        "baseline_section",
         "process_section",
         "autocrop_section",
-        "lens_section",
-        "flatfield_section",
+        "optics_section",
     }
 )
 
@@ -189,6 +188,14 @@ class RightPanel(QWidget):
         self.favourites_sidebar = FavouritesSidebar(self.controller, self.controls_panel)
         self.history_panel = HistoryPanel(self.controller)
 
+        favourites_page = QWidget()
+        favourites_layout = QVBoxLayout(favourites_page)
+        favourites_layout.setContentsMargins(0, 0, 0, 0)
+        favourites_layout.setSpacing(THEME.space_lg)
+        favourites_layout.addWidget(self.favourites_sidebar)
+        favourites_layout.addWidget(self.controls_panel.presets_section)
+        favourites_layout.addStretch(1)
+
         # Tab descriptors: the workflow control-group pages, then Favorites and History.
         # (key, icon_name, tooltip, content_widget, [section_attrs])
         tab_specs = [
@@ -196,7 +203,7 @@ class RightPanel(QWidget):
         ]
         self._frame_tab_headers = {page["key"]: page["header"] for page in self.controls_panel.pages if page["header"]}
         tab_specs += [
-            ("favourites", "fa5s.star", "Favorites", self.favourites_sidebar, []),
+            ("favourites", "fa5s.star", "Favorites", favourites_page, ["presets_section"]),
             ("history", "fa5s.history", "History", self.history_panel, []),
         ]
 
@@ -278,10 +285,11 @@ class RightPanel(QWidget):
 
     def _build_roll_page(self) -> QWidget:
         """Facts the whole roll shares, not one frame's own edit: what film it is (Film
-        Mode), how its files become frames (Trichrome, Half Frame), what rig scanned it
-        and how (Calibration, Demosaic, Auto Crop, Lens Correction, Flat Field), its
-        shared exposure baseline (Normalization) and reusable presets. Film Mode leads,
-        since it decides which of the others even apply."""
+        Mode), how its files become frames (Frame Assembly), what the rig does to it
+        (Calibration) and the frame's shape (Crop), its shared exposure baseline (Roll
+        Analysis) and each frame's own (Metering), and how it decodes and the scanning
+        optics (Raw Decode, Optics). Film Mode leads, since it decides which of the others
+        even apply."""
         cp = self.controls_panel
         page = QWidget()
         page_layout = QVBoxLayout(page)
@@ -293,11 +301,11 @@ class RightPanel(QWidget):
             (
                 cp.film_section,
                 cp.sensor_section,
-                cp.demosaic_section,
-                cp.process_section,
                 cp.autocrop_section,
-                cp.lens_section,
-                cp.flatfield_section,
+                cp.baseline_section,
+                cp.process_section,
+                cp.demosaic_section,
+                cp.optics_section,
             )
         )
         self.roll_tab_header.apply_requested.connect(self._apply_roll_tab)
@@ -307,15 +315,13 @@ class RightPanel(QWidget):
         page_layout.addWidget(cp.roll_override_summary)
         for section in (
             cp.film_section,
-            cp.trichrome_section,
-            cp.half_frame_section,
+            cp.assembly_section,
             cp.sensor_section,
-            cp.demosaic_section,
-            cp.process_section,
             cp.autocrop_section,
-            cp.lens_section,
-            cp.flatfield_section,
-            cp.presets_section,
+            cp.baseline_section,
+            cp.process_section,
+            cp.demosaic_section,
+            cp.optics_section,
         ):
             page_layout.addWidget(section)
         page_layout.addStretch(1)

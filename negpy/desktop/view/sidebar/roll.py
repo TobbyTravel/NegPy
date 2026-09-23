@@ -20,7 +20,6 @@ BATCH_ANALYSIS_TOOLTIP = (
     "Roll Analysis — measures the exposure of every loaded frame outside a scene and saves the average as this roll's baseline"
 )
 BATCH_ANALYSIS_DISABLED_TOOLTIP = "Open this roll first — Roll Analysis measures the files currently loaded."
-ANALYZE_SCENES_TOOLTIP = "Analyze All Scenes — run Scene Analysis on every scene of this roll, one after another"
 FROM_FRAME_TOOLTIP = (
     "Use This Frame — save the current frame's bounds as this roll's baseline, in place of a measured "
     "average. Every frame outside a scene on Use Luma/Color Average follows it, including one loaded later."
@@ -43,20 +42,16 @@ class RollAnalysisSidebar(BaseSidebar):
     """
 
     def _init_ui(self) -> None:
-        self.layout.addWidget(section_subheader("ROLL BASELINE"))
+        self.layout.addWidget(section_subheader("ROLLS"))
         self.roll_combo = SearchableGearCombo(placeholder="Search rolls…")
         self.roll_combo.setToolTip(wrap_tooltip("Picking a roll loads its saved baseline onto the loaded files."))
-        self.layout.addWidget(self.roll_combo)
-
+        self.reanalyze_btn = self._icon_action("fa5s.tachometer-alt", BATCH_ANALYSIS_TOOLTIP)
+        self.from_frame_btn = self._icon_action("fa5s.crosshairs", FROM_FRAME_TOOLTIP)
         row = QHBoxLayout()
-        self.reanalyze_btn = self._labeled_action("fa5s.tachometer-alt", " Reanalyze", BATCH_ANALYSIS_TOOLTIP)
-        self.from_frame_btn = self._labeled_action("fa5s.crosshairs", " Use This Frame", FROM_FRAME_TOOLTIP)
-        for btn in (self.reanalyze_btn, self.from_frame_btn):
-            row.addWidget(btn, 1)
+        row.addWidget(self.roll_combo, 1)
+        row.addWidget(self.reanalyze_btn)
+        row.addWidget(self.from_frame_btn)
         self.layout.addLayout(row)
-        # Lock Bounds is adopted into this row (between the two) once ControlsPanel wires
-        # it in -- see insert_lock_button.
-        self._picker_row = row
 
         self.roll_status_hint = hint_label("", "muted")
         self.layout.addWidget(self.roll_status_hint)
@@ -69,26 +64,16 @@ class RollAnalysisSidebar(BaseSidebar):
         self.layout.addWidget(self.scene_rows)
         self.scenes_hint = hint_label("Select frames in the Film Strip, then right-click › Scene › Group as Scene…", "muted")
         self.layout.addWidget(self.scenes_hint)
-        self.analyze_scenes_btn = self._labeled_action("fa5s.tachometer-alt", " Analyze All Scenes", ANALYZE_SCENES_TOOLTIP)
-        self.layout.addWidget(self.analyze_scenes_btn)
 
         self._roll_sync_key = None
         self._scene_sync_key = None
         self._refresh_rolls(force=True)
         self.layout.addStretch()
 
-    def insert_lock_button(self, lock_bounds_btn) -> None:
-        """Adopts ProcessSidebar's Lock Bounds toggle into the button row, between
-        Reanalyze and Use This Frame. Lock Bounds is specifically about this frame's
-        relationship to Roll Analysis, so it belongs beside the actions it exempts
-        the frame from."""
-        self._picker_row.insertWidget(1, lock_bounds_btn, 1)
-
     def _connect_signals(self) -> None:
         self.roll_combo.selection_changed.connect(self._on_roll_picked)
         self.reanalyze_btn.clicked.connect(self.controller.request_batch_normalization)
         self.from_frame_btn.clicked.connect(self._on_from_frame_clicked)
-        self.analyze_scenes_btn.clicked.connect(self.controller.request_analyze_all_scenes)
         self.controller.session.files_changed.connect(self._refresh_scenes)
         self.sync_ui()
 
@@ -180,7 +165,6 @@ class RollAnalysisSidebar(BaseSidebar):
         self.scenes_header.setVisible(in_roll)
         self.scene_rows.setVisible(bool(scenes))
         self.scenes_hint.setVisible(in_roll and not scenes)
-        self.analyze_scenes_btn.setVisible(bool(scenes))
 
     def _update_roll_status_hint(self, active_id: Optional[str], selected_id: str) -> None:
         """Flags a baseline picked from a roll other than the one loaded."""
