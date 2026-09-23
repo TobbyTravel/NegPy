@@ -1031,6 +1031,23 @@ class TestAppController(unittest.TestCase):
 
         self.assertEqual(self.controller.frame_section_scope("tone"), "frame")
 
+    def test_frame_section_scopes_answers_every_card_off_one_roll_read(self):
+        from negpy.services.assets import rolls
+
+        self._wire_repo_store()
+        repo = self.controller.session.repo
+        roll_id = rolls.create_virtual_roll(repo, "Portra", [])
+        state = self.mock_session_manager.state
+        state.active_roll_id = roll_id
+        state.config = replace(state.config, exposure=replace(state.config.exposure, dye_separation=0.4))
+        self.controller.record_section_push("tone", {"dye_separation": 0.4})
+        repo.get_global_setting.reset_mock()
+
+        scopes = self.controller.frame_section_scopes(("tone", "finish"))
+
+        self.assertEqual(scopes, {"tone": "roll", "finish": "frame"})
+        self.assertEqual(repo.get_global_setting.call_count, 1)
+
     def test_a_frame_section_reads_frame_with_no_roll_open(self):
         state = self.mock_session_manager.state
         state.active_roll_id = None
@@ -5400,10 +5417,10 @@ class TestLibrarySearch(unittest.TestCase):
 
     def test_open_roll_loads_a_folder_rolls_own_and_extra_paths(self):
         self._dict_repo()
-        from negpy.services.assets.rolls import add_extra_member, recognize_folder
+        from negpy.services.assets.rolls import add_extra_members, recognize_folder
 
         roll_id = recognize_folder(self.controller.session.repo, "/photos/roll_a")
-        add_extra_member(self.controller.session.repo, roll_id, "/elsewhere/c.nef")
+        add_extra_members(self.controller.session.repo, roll_id, ["/elsewhere/c.nef"])
 
         with patch.object(self.controller, "request_asset_discovery") as discovery:
             self.controller.open_roll(roll_id)
