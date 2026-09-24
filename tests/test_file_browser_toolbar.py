@@ -18,15 +18,16 @@ def panel(qapp):
     return panel
 
 
-def test_sort_joins_the_library_toolbar(panel):
-    """No top-level toolbar: Sort sits in LibraryTree's own row, sized like every other
-    section-toolbar button rather than as a one-off."""
+def test_each_section_toolbar_has_its_own_sort(panel):
+    """The Film Strip's Sort orders the frames, the Library's the roll list; both sized like
+    every other section-toolbar button."""
     browser = panel.file_browser
     tree = panel.library_tree
 
-    assert tree.isAncestorOf(browser.sort_btn)
-    assert browser.sort_btn.height() == TOOLBAR_BUTTON_HEIGHT
-    assert browser.sort_btn in tree.toolbar.buttons
+    assert browser.sort_btn in browser.film_strip_toolbar.buttons
+    assert tree.sort_btn in tree.toolbar.buttons
+    assert browser.sort_btn is not tree.sort_btn
+    assert {browser.sort_btn.height(), tree.sort_btn.height()} == {TOOLBAR_BUTTON_HEIGHT}
 
 
 def test_both_section_toolbars_size_their_buttons_the_same(panel):
@@ -49,6 +50,7 @@ def test_film_strip_toolbar_holds_roll_scoped_actions(panel):
         browser.update_thumbnails_btn,
         browser.unload_btn,
         browser.scenes_btn,
+        browser.sort_btn,
         browser.sheet_btn,
     ]
     assert browser.film_strip_toolbar.buttons == expected
