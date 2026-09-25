@@ -207,7 +207,9 @@ class LibraryTree(QWidget):
         text, ok = QInputDialog.getMultiLineText(
             self,
             "Discovery Filters",
-            "Skip folders whose name contains a line.\nA line with * must match the whole name (raw_*).",
+            "One filter per line. A folder that matches is skipped, with everything in it.\n"
+            "Text matches any part of the name, ignoring case: export skips old_exports.\n"
+            "* is a wildcard, and the filter must match the whole name: raw_* skips raw_01.",
             "\n".join(rolls.discovery_filters(self.repo)),
         )
         if ok:
