@@ -87,6 +87,7 @@ def _caps_for(caps: Any) -> ScannerCapabilities:
         # One read mode means no Superfine to switch: every pass on the unit is already one
         # line at a time.
         superfine=bool(caps.multi_line),
+        exposure_lock=True,
     )
 
 
@@ -375,7 +376,7 @@ class NkscanBackend:
                 infrared=bool(params.capture_ir),
                 clean=bool(params.clean),
                 lock_white_balance=self.locks_white_balance(params.film_type),
-                exposures=exposures,
+                exposures=exposures if exposures is not None else params.exposures,
                 progress=report,
             )
         if cancel.is_set():
@@ -383,6 +384,39 @@ class NkscanBackend:
         if result.cleaned:
             logger.info("Dust removal rebuilt %d pixels", result.cleaned)
         return self._to_result(result, model)
+
+    def meter(
+        self,
+        device_id: str,
+        params: ScanParams,
+        progress: Callable[..., None],
+        cancel: threading.Event,
+    ) -> dict[str, int]:
+        """Exposures for `params.frame`, to hand later scans through `ScanParams.exposures`.
+
+        Metered on the whole detected frame, never the window: the rect keeps the film base
+        between frames, which a colour negative's per-channel meter lands on, while a window
+        cropped to the picture meters its highlights. Infrared is metered too, so the result
+        also holds for an IR or ICE scan.
+        """
+        with self._lock:
+            if device_id in self._sessions:
+                raise RuntimeError(f"Device {device_id} is held by an open session")
+        _validate_params(params)
+        session, _model = self._open(device_id)
+        try:
+            report = _progress_bridge(progress, cancel)
+            rect = self._resolve_frame(session, device_id, params, report)
+            rect = _shift_frame(rect, _offset_units(params.frame_offset_mm, int(session.capabilities.optical_dpi)))
+            lock = self.locks_white_balance(params.film_type)
+            with self._mapped_errors():
+                exposures = session.meter_frame(rect, infrared=True, lock_white_balance=lock, progress=report)
+        finally:
+            with suppress(Exception):
+                session.close()
+        if cancel.is_set():
+            raise RuntimeError("Metering cancelled")
+        return {str(k): int(v) for k, v in exposures.items()}
 
     def scan_frame(
         self,
@@ -398,7 +432,10 @@ class NkscanBackend:
         superfine ordering, and asking for the fast one is refused before the stage moves.
         """
         want = bool(superfine) or not bool(session.capabilities.multi_line)
-        return session.scan_frame(rect, superfine=want, **options)
+        result = session.scan_frame(rect, superfine=want, **options)
+        if not result.complete:
+            raise TransientScanError(f"The pass ended early: {result.blocks} blocks arrived")
+        return result
 
     def locks_white_balance(self, film_type: str) -> bool:
         """nkscan's own metering default for this film.
@@ -417,6 +454,7 @@ class NkscanBackend:
             dpi=int(result.dpi),
             device_model=model,
             ir_valid_mask=np.ones(ir.shape[:2], dtype=np.bool_) if ir is not None else None,
+            exposures={str(k): int(v) for k, v in result.exposures.items()},
         )
 
     # ── frames ────────────────────────────────────────────────────────
@@ -432,6 +470,9 @@ class NkscanBackend:
         """Measure the loaded film, cache the rects, and return nkscan's Discovery."""
         with self._mapped_errors():
             discovery = session.discover_frames(format=film_format, progress=progress)
+        # A short thumbnail pass reads as film ending early, so its fit miscounts the frames.
+        if discovery.thumbnail_complete is False:
+            raise TransientScanError(f"The thumbnail pass ended early: {discovery.thumbnail_blocks} blocks arrived")
         self._frames[device_id] = [tuple(int(v) for v in rect) for rect in discovery.frames]
         thumbnail = getattr(discovery, "thumbnail", None)
         if thumbnail:
