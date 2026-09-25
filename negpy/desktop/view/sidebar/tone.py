@@ -3,10 +3,11 @@ from PyQt6.QtWidgets import QButtonGroup, QComboBox, QDialog, QHBoxLayout
 
 from negpy.desktop.view.shortcut_registry import tooltip_with_shortcut
 from negpy.desktop.view.sidebar.base import BaseSidebar
-from negpy.desktop.view.styles.templates import ICON_BUTTON_WIDTH, section_subheader, wrap_tooltip
+from negpy.desktop.view.styles.templates import ICON_BUTTON_WIDTH, hint_label, section_subheader, wrap_tooltip
 from negpy.desktop.view.styles.theme import THEME
 from negpy.desktop.view.widgets.sliders import CompactSlider
 from negpy.features.exposure.logic import per_channel_dye_separation
+from negpy.features.hdr.models import hdr_active
 from negpy.features.exposure.models import EXPOSURE_CONSTANTS, TUNABLE_TARGETS, apply_targets
 
 _CH_SUFFIX = ("red", "green", "blue")
@@ -103,6 +104,17 @@ class ToneSidebar(BaseSidebar):
         auto_row.addWidget(self.targets_btn)
         auto_row.addWidget(self.test_strip_btn)
         self.layout.addLayout(auto_row)
+        # Disabled widgets get no hover, so the reason hangs off the hint under them.
+        self.auto_merged_hint = hint_label("Not applied to a merged bracket.")
+        self.auto_merged_hint.setToolTip(
+            wrap_tooltip(
+                "A merge already places the tones: Render exposure picks which exposure it prints "
+                "at, and metering the merged frame would divide that choice straight back out. "
+                "Unmerge the frame to meter it."
+            )
+        )
+        self.auto_merged_hint.setVisible(False)
+        self.layout.addWidget(self.auto_merged_hint)
         self.layout.addWidget(self.density_slider)
 
         self.paper_black_btn = self._small_toggle(
@@ -434,11 +446,11 @@ class ToneSidebar(BaseSidebar):
 
             # On the transfer path (an as-captured Slide, or any Positive frame) the render
             # starts from the capture, so the paper model has nothing to act on. Density,
-            # Grade, Toe and Shoulder drive the transfer curve instead (exposure/transfer.py).
-            from negpy.features.exposure.transfer import is_transfer_path
+            # Grade, Toe and Shoulder drive the transfer curve instead (features/transparency/logic.py).
+            from negpy.features.process.path import RenderPath, render_path
 
             proc = self.state.config.process
-            transfer = is_transfer_path(mode, proc.e6_normalize, proc.positive_source, conf.render_intent)
+            transfer = render_path(proc) is not RenderPath.PRINT
             # Shadows and Highlights Density stay live on the transfer path: the curve implements
             # Zone Density with the print's own weights, and they are the only controls there that
             # open shadows without moving the whole scale. Split Grade does not, because it rotates
@@ -454,12 +466,6 @@ class ToneSidebar(BaseSidebar):
                 self.mask_spacer_slider,
             ):
                 w.setVisible(not transfer)
-            # Auto Density and Auto Grade meter the frame to pick a look, which a raw
-            # un-normalized slide exists to avoid for a deliberate exposure. A Positive
-            # frame has no such bracket to protect, so they run (transfer_auto_terms).
-            auto_hidden = transfer and not proc.positive_source
-            for w in (self.auto_density_btn, self.auto_grade_btn):
-                w.setVisible(not auto_hidden)
             # Per-layer trims are meaningless on a single-emulsion B&W paper.
             is_bw = mode == ProcessMode.BW
             if is_bw and self._channel_index() != 0:
@@ -478,7 +484,7 @@ class ToneSidebar(BaseSidebar):
             self.sh_w_trim_slider.setVisible(not global_mode)
             # Dye Separation swaps the same way on both paths: the global slider in the
             # global view, the per-channel trim in a channel tab (see
-            # features/exposure/transfer.py). Separation Damping has no per-channel
+            # features/transparency/logic.py). Separation Damping has no per-channel
             # trim of its own, so it stays global-view-only on both paths too.
             self.dye_separation_slider.setVisible(global_mode and not is_bw)
             self.dye_separation_trim_slider.setVisible(not global_mode and not is_bw)
@@ -511,6 +517,11 @@ class ToneSidebar(BaseSidebar):
                 self.dye_separation_trim_slider.setValue(getattr(conf, f"dye_separation_trim_{ch}"))
             for w in self._global_only:
                 w.setEnabled(global_mode)
+            # WorkspaceConfig holds both off on a merge; greyed so the reason can show.
+            merged = hdr_active(self.state.config.hdr)
+            for w in (self.auto_density_btn, self.auto_grade_btn):
+                w.setEnabled(global_mode and not merged)
+            self.auto_merged_hint.setVisible(merged)
 
             for btn, fields in self._channel_buttons:
                 btn.edited_dot.set_active(any(getattr(conf, f) != 0.0 for f in fields))
