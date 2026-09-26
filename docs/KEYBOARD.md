@@ -18,10 +18,10 @@ Actions with no default key are not listed; every one of them can still be bound
 |-----|--------|
 | `Left` | Previous file |
 | `Right` | Next file |
-| `Ctrl + L` | Open the library folder |
-| `Alt + Up` | Go up one library folder |
+| `Ctrl + L` | Open the library |
+| `Ctrl + K` | Find a control, card or action |
 | `Ctrl + F` | Focus the film strip search box |
-| `Ctrl + Shift + F` | Search every library folder and load the matches |
+| `Ctrl + Shift + F` | Search the whole library and load the matches |
 
 ## Triage
 | Key | Action |
@@ -39,9 +39,10 @@ Actions with no default key are not listed; every one of them can still be bound
 | `Shift + S` | Toggle scratch tool |
 | `Shift + K` | Toggle transport-scratch line tool |
 | `Shift + B` | Toggle dodge & burn mask draw |
-| `Shift + R` | Toggle analysis region draw |
+| `Ctrl + R` | Toggle analysis region draw |
 | `M` | Peek flat scan (digital intermediate) |
 | `N` | Peek negative (source as loaded) |
+| `P` | Peek the camera's embedded preview |
 | `Shift + Z` | Adams zone overlay |
 | `Shift + T` | Density × grade test strip |
 | `Shift + F` | Color ring-around (M/Y filtration) |
@@ -70,6 +71,9 @@ Actions with no default key are not listed; every one of them can still be bound
 | `Ctrl + [` | Toggle session panel (re-docks when floating) |
 | `Ctrl + ]` | Toggle controls panel (re-docks when floating) |
 | `Ctrl + Shift + L` | Dock session and controls panels |
+| `Shift + H` | Hide or show both side panels |
+| `Shift + G` | Light Table: the roll as a grid in place of the canvas |
+| `Shift + R` | Reference view: pin this frame beside the canvas to match others to it |
 | `0` | Fit to window |
 | `1` | Zoom 100% |
 | `2` | Zoom 200% |
@@ -93,6 +97,8 @@ Actions with no default key are not listed; every one of them can still be bound
 | `Alt + Y` / `Alt + Shift + Y` | Increase / decrease **Toe width** (default step 0.01) |
 | `Alt + U` / `Alt + Shift + U` | Increase / decrease **Shoulder** (default step 0.01) |
 | `Alt + I` / `Alt + Shift + I` | Increase / decrease **Shoulder width** (default step 0.01) |
+| `Alt + P` / `Alt + Shift + P` | Increase / decrease **White point** (default step 0.01) |
+| `Alt + O` / `Alt + Shift + O` | Increase / decrease **Black point** (default step 0.01) |
 
 ## Actions
 | Key | Action |
@@ -113,8 +119,6 @@ Actions with no default key are not listed; every one of them can still be bound
 | `Alt + B` / `Alt + Shift + B` | Increase / decrease **Analysis buffer** (default step 0.01) |
 | `Alt + N` / `Alt + Shift + N` | Increase / decrease **Luma range clip** (default step 1) |
 | `Alt + E` / `Alt + Shift + E` | Increase / decrease **Color range clip** (default step 1) |
-| `Alt + P` / `Alt + Shift + P` | Increase / decrease **White point** (default step 0.01) |
-| `Alt + O` / `Alt + Shift + O` | Increase / decrease **Black point** (default step 0.01) |
 | `Alt + 1` / `Alt + Shift + 1` | Increase / decrease **Crosstalk** (default step 0.01) |
 
 ## Lab
@@ -147,10 +151,10 @@ Actions with no default key are not listed; every one of them can still be bound
 ## Tabs
 | Key | Action |
 |-----|--------|
-| `Ctrl + 1` | Setup tab |
+| `Ctrl + 1` | Roll tab |
 | `Ctrl + 2` | Geometry tab |
-| `Ctrl + 3` | Tone tab |
-| `Ctrl + 4` | Lab & Toning tab |
+| `Ctrl + 3` | Exposure tab |
+| `Ctrl + 4` | Color tab |
 | `Ctrl + 5` | Finish tab |
 | `Ctrl + 6` | History tab |
 | `Ctrl + 7` | Export tab |
@@ -170,6 +174,8 @@ While a test strip or ring-around is up, `[` and `]` turn that proof's ladder in
 | Input | Action |
 |-----|--------|
 | `Mouse Wheel` | Zoom in / out (up to 400%); **Reverse scroll zoom** in Preferences flips the direction |
+| `Alt` + `Mouse Wheel` | Brush Size up / down, for the heal, scratch and exclusion brushes |
+| `Pinch` | Zoom in / out; sizes the brush instead while the Heal or Scratch tool is live, or a right-click is set to exclude |
 | `Middle Click` + `Drag` | Pan zoomed image |
 | `Left Click` + `Drag` | Pan zoomed image (when no tool is active) |
 

@@ -180,9 +180,7 @@ def _validate_params(params: ScanParams, *, model: Any | None = None) -> None:
         if model is not None and not getattr(model, "scan_ready", False):
             raise RuntimeError(f"{getattr(model, 'model', 'device')} does not support Multi-Pass")
         if params.capture_ir:
-            raise RuntimeError(
-                "IR and Multi-Pass cannot be combined yet — scan IR separately, or set Passes to 1."
-            )
+            raise RuntimeError("IR and Multi-Pass cannot be combined yet — scan IR separately, or set Passes to 1.")
 
 
 class PlustekSession:

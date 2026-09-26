@@ -458,19 +458,6 @@ def test_every_other_film_keeps_its_factory_balance() -> None:
 # ── what is on the film ───────────────────────────────────────────────────
 
 
-def test_reversal_film_is_measured_the_other_way_round() -> None:
-    """Unexposed slide film develops to maximum density, a negative to its base."""
-    backend, module = make_backend()
-    session = backend.open_session(DEVICE_ID)
-    backend.discover_frames(module.opened[-1], DEVICE_ID, film_format=None, film_type="positive")
-    assert module.opened[-1].polarities == [True]
-
-    backend.forget_frames(DEVICE_ID)
-    backend.discover_frames(module.opened[-1], DEVICE_ID, film_format=None, film_type="mono")
-    assert module.opened[-1].polarities == [True, False]
-    session.close()
-
-
 def test_ir_on_black_and_white_is_refused_before_the_unit_moves() -> None:
     backend, module = make_backend()
     with pytest.raises(RuntimeError, match="B&W negative blocks infrared"):
@@ -515,3 +502,89 @@ def test_the_films_the_backend_names_are_films_the_extension_knows() -> None:
     backend, _ = make_backend()
     for film in FILM_TYPES:
         assert backend.locks_white_balance(film) == nkscan.Capabilities.locks_white_balance(film)
+
+
+def test_a_per_frame_offset_slides_only_the_feed_axis_of_the_frame_asked_for() -> None:
+    """The rect moves by the dialled distance on the feed axis only."""
+    shift = round(0.7 * 4000 / 25.4)  # 0.7 mm at the fake's optical dpi
+    for frame, offset_mm, expected in ((3, 0.0, 0), (3, 0.7, shift), (3, -0.7, -shift), (1, 0.7, shift)):
+        backend, module = make_backend()
+        _scan(backend, dataclasses.replace(_PARAMS, frame=frame, frame_offset_mm=offset_mm))
+
+        rect = module.opened[-1].scans[-1]["frame"]
+        detected = FRAMES[frame - 1]
+        assert rect[0] - detected[0] == expected
+        assert rect[2] - detected[2] == expected
+        assert (rect[1], rect[3]) == (detected[1], detected[3])  # across-film edges untouched
+        assert rect[2] - rect[0] == detected[2] - detected[0]  # the frame keeps its length
+
+
+def test_the_scan_logs_the_detected_and_the_shifted_rect(caplog) -> None:
+    """Which rect a frame was actually scanned at has to be readable without the file."""
+    import logging
+
+    backend, _module = make_backend()
+    with caplog.at_level(logging.INFO):
+        _scan(backend, dataclasses.replace(_PARAMS, frame=2, frame_offset_mm=1.0))
+
+    assert "detected (10742, 0, 16410, 3945)" in caplog.text
+    assert "+1.00 mm" in caplog.text
+
+
+# ── exposure lock ─────────────────────────────────────────────────────────
+
+
+def _meter(backend, params=_PARAMS):
+    return backend.meter(DEVICE_ID, params, lambda *_: None, threading.Event())
+
+
+def test_the_backend_offers_an_exposure_lock() -> None:
+    backend, _ = make_backend()
+    assert backend.list_devices()[0].capabilities.exposure_lock
+
+
+def test_locked_exposures_reach_the_scan_and_skip_metering() -> None:
+    backend, module = make_backend()
+    locked = {"red": 5, "green": 6, "blue": 7}
+    _scan(backend, dataclasses.replace(_PARAMS, exposures=locked))
+    assert module.opened[-1].scans[-1]["exposures"] == locked
+
+
+def test_a_scan_reports_the_exposures_it_ran_at() -> None:
+    backend, _ = make_backend()
+    assert _scan(backend).exposures == {"red": 1, "green": 2, "blue": 3}
+
+
+def test_metering_reads_the_whole_detected_frame_with_its_offset_but_not_the_window() -> None:
+    backend, module = make_backend()
+    params = dataclasses.replace(_PARAMS, frame=2, frame_offset_mm=1.0, window=(0.1, 0.1, 0.9, 0.9))
+
+    exposures = _meter(backend, params)
+
+    session = module.opened[-1]
+    assert session.meters == [{"frame": _shift_frame(FRAMES[1], _offset_units(1.0, 4000)), "infrared": True, "lock_white_balance": False}]
+    assert session.scans == []
+    assert exposures == {"red": 11, "green": 22, "blue": 33, "infrared": 44}
+    assert session.closed
+
+
+def test_a_short_pass_is_a_transient_error_so_the_scan_is_retried() -> None:
+    backend, module = make_backend()
+    backend.detect_frames(DEVICE_ID)
+    module.short_pass = True
+    with pytest.raises(TransientScanError, match="pass ended early: 0 blocks"):
+        _scan(backend)
+
+
+def test_a_short_thumbnail_pass_caches_no_frames() -> None:
+    backend, _ = make_backend(short_pass=True)
+    with pytest.raises(TransientScanError, match="thumbnail"):
+        backend.detect_frames(DEVICE_ID)
+    assert backend.frames(DEVICE_ID) == []
+
+
+def test_a_held_device_refuses_a_stateless_meter() -> None:
+    backend, _ = make_backend()
+    with backend.open_session(DEVICE_ID):
+        with pytest.raises(RuntimeError, match="held"):
+            _meter(backend)

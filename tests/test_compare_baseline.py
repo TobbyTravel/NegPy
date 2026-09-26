@@ -7,12 +7,12 @@ from dataclasses import replace
 
 from negpy.desktop.controller import baseline_compare_config
 from negpy.domain.models import WorkspaceConfig
-from negpy.features.exposure.models import ExposureConfig
 from negpy.features.finish.models import FinishConfig
 from negpy.features.lab.models import LabConfig
 from negpy.features.process.models import ProcessMode
 from negpy.features.retouch.models import RetouchConfig
 from negpy.features.toning.models import ToningConfig
+from negpy.kernel.system.config import DEFAULT_WORKSPACE_CONFIG
 
 
 def _edited_config() -> WorkspaceConfig:
@@ -39,7 +39,7 @@ def _edited_config() -> WorkspaceConfig:
 
 def test_baseline_resets_creative_sections() -> None:
     base = baseline_compare_config(_edited_config())
-    assert base.exposure == ExposureConfig()
+    assert base.exposure == DEFAULT_WORKSPACE_CONFIG.exposure
     assert base.lab == LabConfig()
     assert base.toning == ToningConfig()
     assert base.finish == FinishConfig()
@@ -55,3 +55,18 @@ def test_baseline_preserves_process_and_geometry() -> None:
     assert base.process.local_ceils == (0.8, 0.9, 0.95)
     # Same framing.
     assert base.geometry == edited.geometry
+
+
+def test_baseline_zeroes_cast_removal_on_transparency() -> None:
+    """A slide's live render starts Cast Removal at 0 (cast_removal_for_mode); the
+    'before' must match, or it gray-balances a color the 'after' never touches."""
+    cfg = replace(WorkspaceConfig(), process=replace(WorkspaceConfig().process, process_mode=ProcessMode.E6))
+    base = baseline_compare_config(cfg)
+    assert base.exposure.cast_removal_strength == 0.0
+
+
+def test_baseline_exposure_is_the_shipped_default_on_transparency() -> None:
+    """The transfer curve is identity only at the shipped grade, so the 'before' of an
+    untouched slide must carry it, not the bare dataclass default."""
+    cfg = replace(WorkspaceConfig(), process=replace(WorkspaceConfig().process, process_mode=ProcessMode.E6))
+    assert baseline_compare_config(cfg).exposure.grade == DEFAULT_WORKSPACE_CONFIG.exposure.grade

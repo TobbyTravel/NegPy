@@ -14,6 +14,15 @@ ICON_BUTTON_WIDTH = 36
 FIELD_LABEL_WIDTH = 90
 # The Scan buttons: the one control that moves a transport and writes files, so taller than a row button.
 SCAN_BUTTON_HEIGHT = 40
+# Section-header buttons: the ⓘ/reset/scope row, and the header height that fits them
+# with the row's own vertical padding.
+HEADER_BUTTON_SIZE = 24
+HEADER_ICON_SIZE = 13
+HEADER_HEIGHT = 40
+# The section toolbars (Film Strip, Library): one height and one icon size, so the two
+# rows read as one control set.
+TOOLBAR_BUTTON_HEIGHT = 28
+TOOLBAR_ICON_SIZE = 16
 
 _default_btn_height: int | None = None
 
@@ -203,19 +212,19 @@ def dialog_pane_qss() -> str:
 
 
 def labeled_toggle_qss() -> str:
-    """Segmented/selector toggle (channel rows, intent rows): base type, 8px padding."""
-    return f"font-size: {THEME.font_size_base}px; padding: 8px;"
+    """Segmented/selector toggle. Vertical padding matches default_button_height()'s reference, or descenders clip."""
+    return f"font-size: {THEME.font_size_base}px; padding: 6px 8px;"
 
 
 class EditedDot(QLabel):
     """Red dot marking an edited (non-default) control. Standalone for layouts;
     pass overlay_on to pin it to a widget's top-right corner instead."""
 
-    def __init__(self, overlay_on: QWidget | None = None, margin: int = 4) -> None:
+    def __init__(self, overlay_on: QWidget | None = None, margin: int = 4, color: str = THEME.channel_red) -> None:
         super().__init__(overlay_on)
         self._margin = margin
         self.setFixedSize(8, 8)
-        self.setStyleSheet(f"background-color: {THEME.channel_red}; border-radius: 4px;")
+        self.setStyleSheet(f"background-color: {color}; border-radius: 4px;")
         self.hide()
         if overlay_on is not None:
             overlay_on.installEventFilter(self)
@@ -353,6 +362,16 @@ def tool_toggle_qss(icon_only: bool = False) -> str:
 
 def slider_label_qss(color: str) -> str:
     return f"font-size: {THEME.font_size_base}px; color: {color};"
+
+
+def slider_value_qss() -> str:
+    return (
+        f"QDoubleSpinBox {{font-size: {THEME.font_size_base}px; color: {THEME.text_primary}; background: transparent;"
+        " border: none; border-bottom: 1px solid transparent; padding: 0px;}"
+        f"QDoubleSpinBox:hover {{border-bottom: 1px solid {THEME.border_hover};}}"
+        f"QDoubleSpinBox:focus {{border-bottom: 1px solid {THEME.accent_primary};}}"
+        f"QDoubleSpinBox:disabled {{color: {THEME.text_muted};}}"
+    )
 
 
 def slider_handle_qss(color: str) -> str:

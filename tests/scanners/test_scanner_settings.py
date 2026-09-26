@@ -179,3 +179,34 @@ def test_out_of_range_n_passes_degrades_into_bounds():
     assert restored.n_passes == 9
     restored = ScannerSettings.from_dict({"n_passes": 0})
     assert restored.n_passes == 1
+
+
+def test_per_frame_offsets_round_trip_through_json_string_keys():
+    restored = ScannerSettings.from_dict({"frame_offsets": {"2": 0.4, "5": -0.3}})
+    assert restored.frame_offsets == {2: 0.4, 5: -0.3}
+
+
+def test_a_saved_dng_output_format_lands_on_tiff():
+    # DNG output is retired; the saved preference must not survive as an unknown format.
+    assert ScannerSettings.from_dict({"output_format": "DNG"}).output_format == "TIFF"
+    assert ScannerSettings.from_dict({"output_format": "TIFF (mono)"}).output_format == "TIFF (mono)"
+
+
+def test_an_exposure_lock_survives_a_json_roundtrip():
+    from dataclasses import replace
+
+    locked = replace(
+        ScannerSettings.defaults(),
+        exposure_lock={"red": 142562, "green": 356069, "blue": 387643},
+        exposure_lock_device="usb:001-4",
+        exposure_lock_frame=2,
+        exposure_lock_at="2026-09-22T14:03:00",
+    )
+    assert ScannerSettings.from_dict(json.loads(json.dumps(asdict(locked)))) == locked
+
+
+def test_a_blob_saved_before_the_lock_loads_unlocked():
+    saved = asdict(ScannerSettings.defaults())
+    for key in ("exposure_lock", "exposure_lock_device", "exposure_lock_frame", "exposure_lock_at"):
+        saved.pop(key)
+    assert ScannerSettings.from_dict(saved).exposure_lock is None

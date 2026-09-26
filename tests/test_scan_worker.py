@@ -4,7 +4,7 @@ import threading
 
 import pytest
 
-from negpy.desktop.workers.scan_worker import BatchRequest, RollPreviewRequest, ScanRequest, ScanWorker
+from negpy.desktop.workers.scan_worker import BatchRequest, MeterRequest, RollPreviewRequest, ScanRequest, ScanWorker
 from negpy.infrastructure.scanners.base import ScannerCapabilities, ScannerDevice, ScannerUnavailable
 from negpy.infrastructure.scanners.params import ScanMode, ScanParams
 from negpy.infrastructure.scanners.roll import RollPreview
@@ -79,8 +79,8 @@ class _BatchService:
         self.eject_calls.append(device_id)
         return True
 
-    def detect_frames(self, device_id: str, *, film_format: str | None = None, film_type: str = "negative") -> int:
-        self.detect_calls.append((film_format, film_type))
+    def detect_frames(self, device_id: str, *, film_format: str | None = None) -> int:
+        self.detect_calls.append(film_format)
         return self.detected
 
     def run_scan(self, device_id, params, progress, cancel):
@@ -150,6 +150,27 @@ def test_batch_applies_progressive_offset_per_frame_position() -> None:
 
     # Drift follows the physical frame position (N-1), not the enumeration order.
     assert service.offsets == pytest.approx([1.2, 1.4, 1.6])
+
+
+def test_batch_adds_a_per_frame_correction_on_top_of_the_ramp() -> None:
+    worker = ScanWorker()
+    service = _BatchService()
+    worker._service = service  # type: ignore[assignment]
+    req = BatchRequest(
+        device_id="coolscan3:test",
+        params=ScanParams(dpi=4_000, depth=16, capture_ir=False, frame_offset_mm=1.0),
+        output_folder="/tmp",
+        filename_pattern='scan-{{ "%03d" % seq }}',
+        output_format="TIFF",
+        frames=(2, 3, 4),
+        frame_offset_modifier_mm=0.2,
+        frame_offsets={3: -0.5},
+    )
+
+    worker.run_batch(req)
+
+    # Only frame 3 moves; a frame with no entry keeps base + drift.
+    assert service.offsets == pytest.approx([1.2, 0.9, 1.6])
 
 
 def test_batch_passes_a_negative_drift_through_to_the_backend() -> None:
@@ -565,7 +586,7 @@ def test_a_batch_with_no_frames_scans_every_frame_on_the_film() -> None:
     worker.run_batch(_batch_request(frames=(), film_format="66"))
 
     assert service.frames == [1, 2, 3]
-    assert service.detect_calls == [("66", "negative")]
+    assert service.detect_calls == ["66"]
     assert len(done[0]) == 3
 
 
@@ -605,3 +626,86 @@ def test_batch_progress_names_the_frame_and_its_position() -> None:
         "Frame 3 of 3 — Scanning",
     ]
     assert [fraction for fraction, _phase in seen] == pytest.approx([1 / 3, 2 / 3, 1.0])
+
+
+def test_the_batch_logs_the_offset_each_frame_was_scanned_at(caplog) -> None:
+    """Whether a per-frame correction reached the scan must be answerable from the log."""
+    import logging
+
+    worker = ScanWorker()
+    service = _BatchService()
+    worker._service = service  # type: ignore[assignment]
+    req = BatchRequest(
+        device_id="coolscan3:test",
+        params=ScanParams(dpi=4_000, depth=16, capture_ir=False, frame_offset_mm=1.0),
+        output_folder="/tmp",
+        filename_pattern='scan-{{ "%03d" % seq }}',
+        output_format="TIFF",
+        frames=(1, 2),
+        frame_offsets={2: -0.5},
+    )
+
+    with caplog.at_level(logging.INFO):
+        worker.run_batch(req)
+
+    assert "Batch frame 1 at +1.00 mm" in caplog.text
+    assert "Batch frame 2 at +0.50 mm" in caplog.text
+
+
+class _MeterService:
+    def __init__(self, *, error: Exception | None = None, cancel: bool = False) -> None:
+        self.error = error
+        self.cancel = cancel
+        self.calls: list[tuple[str, ScanParams]] = []
+
+    def meter(self, device_id, params, progress, cancel):
+        self.calls.append((device_id, params))
+        progress(0.5, "Metering")
+        if self.cancel:
+            cancel.set()
+        if self.error is not None:
+            raise self.error
+        return {"red": 11, "green": 22, "blue": 33}
+
+
+def _meter_worker(service: _MeterService) -> tuple[ScanWorker, list, list, list]:
+    worker = ScanWorker()
+    worker._service = service  # type: ignore[assignment]
+    metered: list = []
+    errors: list[str] = []
+    cancelled: list = []
+    worker.exposure_metered.connect(lambda exposures, frame: metered.append((exposures, frame)))
+    worker.meter_error.connect(errors.append)
+    worker.cancelled.connect(lambda: cancelled.append(None))
+    return worker, metered, errors, cancelled
+
+
+def test_run_meter_meters_the_frame_where_the_batch_would_scan_it() -> None:
+    service = _MeterService()
+    worker, metered, errors, _ = _meter_worker(service)
+    params = ScanParams(dpi=4000, depth=16, capture_ir=False, frame=3, frame_offset_mm=1.0)
+
+    worker.run_meter(MeterRequest(device_id="nk:1", params=params, frame_offset_modifier_mm=0.5, frame_offsets={3: 0.25}))
+
+    device_id, sent = service.calls[0]
+    assert (device_id, sent.frame, sent.frame_offset_mm) == ("nk:1", 3, 1.0 + 2 * 0.5 + 0.25)
+    assert metered == [({"red": 11, "green": 22, "blue": 33}, 3)]
+    assert errors == []
+    assert worker._scanning is False
+
+
+def test_run_meter_reports_a_failure() -> None:
+    worker, metered, errors, _ = _meter_worker(_MeterService(error=RuntimeError("no film")))
+
+    worker.run_meter(MeterRequest(device_id="nk:1", params=ScanParams(dpi=4000, depth=16, capture_ir=False, frame=2)))
+
+    assert metered == []
+    assert errors == ["no film"]
+
+
+def test_run_meter_cancelled_mid_run_keeps_nothing() -> None:
+    worker, metered, errors, cancelled = _meter_worker(_MeterService(cancel=True))
+
+    worker.run_meter(MeterRequest(device_id="nk:1", params=ScanParams(dpi=4000, depth=16, capture_ir=False, frame=2)))
+
+    assert (metered, errors, cancelled) == ([], [], [None])

@@ -20,17 +20,33 @@ from negpy.features.exposure.processor import (
 from negpy.features.exposure.logic import expand_mask_plane
 from negpy.features.exposure.normalization import contrast_mask_plane, effective_crosstalk_matrix, normalized_roi
 from negpy.features.process.hue import apply_hue_trim
+from negpy.features.process.path import RenderPath, render_path
+from negpy.features.transparency.processor import TransferProcessor, TransparencyBaseProcessor
 from negpy.features.exposure.papers import effective_paper_profile
 from negpy.features.cyanotype.processor import CyanotypeProcessor
 from negpy.features.lith.processor import LithProcessor
 from negpy.features.toning.processor import ToningProcessor
 from negpy.features.lab.logic import apply_clahe
 from negpy.features.lab.processor import PhotoLabProcessor
-from negpy.features.finish.processor import FinishProcessor
+from negpy.features.finish.processor import FinishProcessor, rebate_tone
 from negpy.kernel.system.config import APP_CONFIG
 from negpy.services.view.coordinate_mapping import CoordinateMapping
 
 logger = get_logger(__name__)
+
+
+def base_processor(settings: WorkspaceConfig) -> Any:
+    """The base stage's normalization: the negative's measured stretch, or a slide's fixed window."""
+    if render_path(settings.process) is RenderPath.PRINT:
+        return NormalizationProcessor(settings.process)
+    return TransparencyBaseProcessor(settings.process, settings.exposure.cast_removal_strength)
+
+
+def exposure_processor(settings: WorkspaceConfig) -> Any:
+    """The exposure stage's curve: the print or a slide's transfer, or the Flat master on either base."""
+    if settings.exposure.render_intent == RenderIntent.FLAT or render_path(settings.process) is RenderPath.PRINT:
+        return PhotometricProcessor(settings.exposure, settings.local)
+    return TransferProcessor(settings.exposure, settings.process.positive_source)
 
 
 class DarkroomEngine:
@@ -111,7 +127,7 @@ class DarkroomEngine:
 
         def run_base(img_in: ImageBuffer, ctx: PipelineContext) -> ImageBuffer:
             img_in = GeometryProcessor(settings.geometry).process(img_in, ctx)
-            return NormalizationProcessor(settings.process, settings.exposure.cast_removal_strength).process(img_in, ctx)
+            return base_processor(settings).process(img_in, ctx)
 
         # While the crop tool shows the full uncropped frame, the crop-selection fields
         # (crop_rect, autocrop_offset) only feed context.active_roi, which is itself unused
@@ -131,7 +147,8 @@ class DarkroomEngine:
 
         base_key = (
             settings.process.process_mode,
-            settings.process.e6_normalize,
+            # Routes the base and exposure stages (render_path); a change re-runs both.
+            settings.process.positive_source,
             geometry_key,
             settings.process.analysis_buffer,
             settings.process.analysis_rect,
@@ -157,6 +174,8 @@ class DarkroomEngine:
             settings.process.crosstalk_matrix,
             settings.process.crosstalk_process,
             settings.process.lock_bounds,
+            settings.process.use_cast_average,
+            settings.process.locked_neutral_axis,
             distortion_k1,
             # The transparency branch meters its neutral axis only when Cast Removal is on.
             settings.exposure.cast_removal_strength > 0.0,
@@ -199,7 +218,7 @@ class DarkroomEngine:
                 context.metrics["contrast_mask_roi"] = None
 
         def run_exposure(img_in: ImageBuffer, ctx: PipelineContext) -> ImageBuffer:
-            img_out = PhotometricProcessor(settings.exposure, settings.local, settings.process).process(img_in, ctx)
+            img_out = exposure_processor(settings).process(img_in, ctx)
             # Rides this stage: it needs the print, and its own stage would re-run everything behind
             # it on a drag. Stays inside the flat intent below, being a capture fix, not a look.
             return apply_hue_trim(img_out, settings.process.hue_trim)
@@ -253,7 +272,8 @@ class DarkroomEngine:
             from negpy.services.export.print import PrintService
 
             paper = PrintService.effective_paper_linear(settings.finish, settings.toning)
-            current_img = FinishProcessor(settings.finish, settings.export.export_print_size, paper).process(current_img, context)
+            tone = rebate_tone(settings, context.metrics) if settings.finish.carrier_width > 0.0 else None
+            current_img = FinishProcessor(settings.finish, settings.export.export_print_size, paper, tone).process(current_img, context)
             # Output transform: scene-linear -> display-encoded (flat master skips this).
             current_img = ensure_image(working_oetf_encode(current_img))
 

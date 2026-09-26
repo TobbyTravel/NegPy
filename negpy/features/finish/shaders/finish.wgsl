@@ -9,7 +9,6 @@ struct FinishUniforms {
     carrier_width_px: f32,   // 0 = off
     carrier_rough: f32,
     carrier_flare: f32,      // 0 = off
-    carrier_bw: f32,         // 1 = neutral flare (B&W process)
     carrier_corner: f32,     // aperture corner roundness
     paper_r: f32,            // bare-paper color, scene-linear (matches the mat)
     paper_g: f32,
@@ -21,26 +20,31 @@ struct FinishUniforms {
 @group(0) @binding(2) var<uniform> params: FinishUniforms;
 // (8, CARRIER_SAMPLES) from carrier_profiles(): rows 0-3 gate wobble, rows 4-7 filed edge.
 @group(0) @binding(3) var<storage, read> carrier_prof: array<f32>;
+// (CARRIER_TONE_SAMPLES, 3) from rebate_tone().
+@group(0) @binding(4) var<storage, read> carrier_tone: array<f32>;
 
 // Every CARRIER_* below mirrors logic.py — keep in sync or preview drifts from export.
 const CARRIER_SAMPLES: i32 = 2048;
 const CARRIER_JITTER: f32 = 0.24;
 const CARRIER_INNER_ROUGH: f32 = 0.2;
-const CARRIER_OUTER_JITTER: f32 = 0.225;
+const CARRIER_OUTER_JITTER: f32 = 0.4;
 const CARRIER_CORNER: f32 = 1.4;
+const CARRIER_GATE_CORNER: f32 = 0.2;
+const CARRIER_OFFSET_X: f32 = -0.2;
+const CARRIER_OFFSET_Y: f32 = -0.25;
 const CARRIER_MARGIN: f32 = 0.7;
 const CARRIER_SOFT: f32 = 0.22;
 const CARRIER_FILED_SOFT: f32 = 0.06;
-const CARRIER_FLARE_DEPTH: f32 = 0.35;
-const CARRIER_FLARE_SPILL: f32 = 0.7;
-const CARRIER_FLARE_GAIN: f32 = 0.55;
+const CARRIER_FLARE_DEPTH: f32 = 0.25;
+const CARRIER_FLARE_GAIN: f32 = 0.6;
 const CARRIER_FLARE_BASE: f32 = 0.35;
-const CARRIER_FLARE_HUE: f32 = 1.0;
 const CARRIER_NOISE_SEED: u32 = 0x51ED270Bu;
-const CARRIER_NOISE_CELL: f32 = 1.5;
+const CARRIER_NOISE_CELL: f32 = 0.35;
 const CARRIER_NOISE_OCTAVES: i32 = 4;
-const CARRIER_NOISE_OUTER: f32 = 0.275;
-const CARRIER_NOISE_INNER: f32 = 0.07;
+const CARRIER_NOISE_OUTER: f32 = 0.12;
+const CARRIER_NOISE_INNER: f32 = 0.02;
+const CARRIER_TONE_SAMPLES: i32 = 64;
+const CARRIER_TONE_POWER: f32 = 3.0;
 
 // u32 wrap-around only, so numpy lands on the same lattice values.
 fn hash_lattice(ix: u32, iy: u32) -> f32 {
@@ -81,44 +85,43 @@ fn carrier_noise(x: f32, y: f32) -> f32 {
     return total / norm;
 }
 
+fn carrier_tone_at(t: f32) -> vec3<f32> {
+    let u = pow(clamp(t, 0.0, 1.0), 1.0 / CARRIER_TONE_POWER) * f32(CARRIER_TONE_SAMPLES - 1);
+    let i0 = min(i32(u), CARRIER_TONE_SAMPLES - 2);
+    let f = u - f32(i0);
+    let a = vec3<f32>(carrier_tone[i0 * 3], carrier_tone[i0 * 3 + 1], carrier_tone[i0 * 3 + 2]);
+    let b = vec3<f32>(carrier_tone[i0 * 3 + 3], carrier_tone[i0 * 3 + 4], carrier_tone[i0 * 3 + 5]);
+    return mix(a, b, f);
+}
+
 fn carrier_prof_at(row: i32, s: f32) -> f32 {
     let idx = min(i32(s * f32(CARRIER_SAMPLES)), CARRIER_SAMPLES - 1);
     return carrier_prof[row * CARRIER_SAMPLES + idx];
 }
 
-/// x = filed boundary, y = film-gate boundary, px from the print edge. `end` = distance to
-/// the nearer end of this edge. Both boundaries take the same corner arc, so the band
-/// keeps its width around a corner; the arc runs from the aperture corner, not the print
-/// edge, or most of it is spent inside the paper margin.
-fn carrier_bounds(edge: i32, s: f32, end: f32, n2: f32) -> vec2<f32> {
-    let margin = params.carrier_width_px * CARRIER_MARGIN;
-    let radius = params.carrier_width_px * CARRIER_CORNER * params.carrier_corner;
-    var cut = 0.0;
-    if (radius > 0.0) {
-        let x = clamp(radius - (end - margin), 0.0, radius);
-        cut = radius - sqrt(max(radius * radius - x * x, 0.0));
-    }
+/// Corner retreat of a boundary `at` px from the print edge, from its own corner.
+fn carrier_arc(r: f32, at: f32, end: f32) -> f32 {
+    if (r <= 0.0) { return 0.0; }
+    let x = clamp(r - (end - at), 0.0, r);
+    return r - sqrt(max(r * r - x * x, 0.0));
+}
+
+/// x = filed boundary (aperture frame), y = gate boundary (print frame).
+fn carrier_bounds(edge: i32, s: f32, end: f32, fend: f32, n2: f32) -> vec2<f32> {
+    let w = params.carrier_width_px;
+    let margin = w * CARRIER_MARGIN;
     let jitter = CARRIER_OUTER_JITTER * carrier_prof_at(edge + 4, s) + CARRIER_NOISE_OUTER * n2;
-    let outer = margin + params.carrier_width_px * params.carrier_rough * jitter + cut;
+    let outer = margin + w * params.carrier_rough * jitter + carrier_arc(w * CARRIER_CORNER * params.carrier_corner, margin, fend);
     let wobble = CARRIER_JITTER * CARRIER_INNER_ROUGH * carrier_prof_at(edge, s) + CARRIER_NOISE_INNER * n2;
-    let inner = margin + params.carrier_width_px * (1.0 + wobble) + cut;
+    let inner = margin + w * (1.0 + wobble) + carrier_arc(w * CARRIER_GATE_CORNER, margin + w, end);
     return vec2<f32>(outer, inner);
 }
 
-/// x = flare weight, yzw = weight * tint.
-fn carrier_flare(edge: i32, s: f32, d: f32, outer: f32, a_in: f32, n2: f32) -> vec4<f32> {
+/// x = flare peak, y = gate on the other edges' flares.
+fn carrier_flare(d: f32, outer: f32) -> vec2<f32> {
     let reach = max(1.0, params.carrier_width_px * CARRIER_FLARE_DEPTH);
-    let off = d - outer;
-    let t = clamp(1.0 - max(off, 0.0) / reach + min(off, 0.0) / (reach * CARRIER_FLARE_SPILL), 0.0, 1.0);
-    // Floored |noise|, not a one-sided gate: that left whole edges with no flare.
-    let n = CARRIER_FLARE_BASE + (1.0 - CARRIER_FLARE_BASE) * abs(n2);
-    let amp = params.carrier_flare * CARRIER_FLARE_GAIN * t * t * n * (1.0 - a_in);
-    var tint = vec3<f32>(1.0);
-    if (params.carrier_bw == 0.0) {
-        let theta = CARRIER_FLARE_HUE * carrier_prof_at(edge, s);
-        tint = 0.5 + 0.5 * cos(vec3<f32>(theta) + vec3<f32>(0.0, 2.0943951, 4.1887902));
-    }
-    return vec4<f32>(amp, amp * tint);
+    let t = clamp(1.0 - abs(d - outer) / reach, 0.0, 1.0);
+    return vec2<f32>(t * t, clamp(1.0 + (d - outer) / reach, 0.0, 1.0));
 }
 
 @compute @workgroup_size(8, 8)
@@ -149,8 +152,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         color = color * exp2(-params.vignette_stops * factor);
     }
 
-    // Filed-carrier rebate: multiply toward black inside the jittered frame,
-    // mirroring apply_carrier() in logic.py.
+    // Filed-carrier rebate, mirroring apply_carrier() in logic.py.
     if (params.carrier_width_px > 0.0) {
         let soft = max(1.0, params.carrier_width_px * CARRIER_SOFT);
         let sx = (px.x + 0.5) / full.x;
@@ -161,37 +163,45 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let d_r = full.x - 1.0 - px.x;
         let end_x = min(px.x, full.x - 1.0 - px.x);
         let end_y = min(px.y, full.y - 1.0 - px.y);
+        let q = px - params.carrier_width_px * vec2<f32>(CARRIER_OFFSET_X, CARRIER_OFFSET_Y);
+        let f_dt = q.y;
+        let f_db = full.y - 1.0 - q.y;
+        let f_dl = q.x;
+        let f_dr = full.x - 1.0 - q.x;
+        let fend_x = min(q.x, full.x - 1.0 - q.x);
+        let fend_y = min(q.y, full.y - 1.0 - q.y);
         let cell = max(1.0, params.carrier_width_px * CARRIER_NOISE_CELL);
         let n2 = carrier_noise(px.x / cell, px.y / cell);
-        let b_t = carrier_bounds(0, sx, end_x, n2);
-        let b_b = carrier_bounds(1, sx, end_x, n2);
-        let b_l = carrier_bounds(2, sy, end_y, n2);
-        let b_r = carrier_bounds(3, sy, end_y, n2);
+        let b_t = carrier_bounds(0, sx, end_x, fend_x, n2);
+        let b_b = carrier_bounds(1, sx, end_x, fend_x, n2);
+        let b_l = carrier_bounds(2, sy, end_y, fend_y, n2);
+        let b_r = carrier_bounds(3, sy, end_y, fend_y, n2);
         let in_t = clamp((d_t - b_t.y) / soft + 0.5, 0.0, 1.0);
         let in_b = clamp((d_b - b_b.y) / soft + 0.5, 0.0, 1.0);
         let in_l = clamp((d_l - b_l.y) / soft + 0.5, 0.0, 1.0);
         let in_r = clamp((d_r - b_r.y) / soft + 0.5, 0.0, 1.0);
         let soft_filed = max(1.0, params.carrier_width_px * CARRIER_FILED_SOFT);
-        let out_t = clamp((d_t - b_t.x) / soft_filed + 0.5, 0.0, 1.0);
-        let out_b = clamp((d_b - b_b.x) / soft_filed + 0.5, 0.0, 1.0);
-        let out_l = clamp((d_l - b_l.x) / soft_filed + 0.5, 0.0, 1.0);
-        let out_r = clamp((d_r - b_r.x) / soft_filed + 0.5, 0.0, 1.0);
-        // Products here == the CPU's sequential per-edge slab mixes.
-        let paper = vec3<f32>(params.paper_r, params.paper_g, params.paper_b);
-        let a_out = out_t * out_b * out_l * out_r;
-        color = color * (in_t * in_b * in_l * in_r) * a_out + paper * (1.0 - a_out);
-
-        // Edge order must match apply_carrier()'s slabs — the lerp is order-dependent.
+        let out_t = clamp((f_dt - b_t.x) / soft_filed + 0.5, 0.0, 1.0);
+        let out_b = clamp((f_db - b_b.x) / soft_filed + 0.5, 0.0, 1.0);
+        let out_l = clamp((f_dl - b_l.x) / soft_filed + 0.5, 0.0, 1.0);
+        let out_r = clamp((f_dr - b_r.x) / soft_filed + 0.5, 0.0, 1.0);
+        var lit = 0.0;
         if (params.carrier_flare > 0.0) {
-            let f_t = carrier_flare(0, sx, d_t, b_t.x, in_t, n2);
-            color = color * (1.0 - f_t.x) + f_t.yzw;
-            let f_b = carrier_flare(1, sx, d_b, b_b.x, in_b, n2);
-            color = color * (1.0 - f_b.x) + f_b.yzw;
-            let f_l = carrier_flare(2, sy, d_l, b_l.x, in_l, n2);
-            color = color * (1.0 - f_l.x) + f_l.yzw;
-            let f_r = carrier_flare(3, sy, d_r, b_r.x, in_r, n2);
-            color = color * (1.0 - f_r.x) + f_r.yzw;
+            // Floored |noise|, not a one-sided gate: that left whole edges with no flare.
+            let amp = params.carrier_flare * CARRIER_FLARE_GAIN * (CARRIER_FLARE_BASE + (1.0 - CARRIER_FLARE_BASE) * abs(n2));
+            let f_t = carrier_flare(f_dt, b_t.x);
+            let f_b = carrier_flare(f_db, b_b.x);
+            let f_l = carrier_flare(f_dl, b_l.x);
+            let f_r = carrier_flare(f_dr, b_r.x);
+            // The bevel spans only the aperture, so the other edges gate each edge's flare.
+            lit = amp * (f_t.x * f_b.y * f_l.y * f_r.y + f_b.x * f_t.y * f_l.y * f_r.y
+                + f_l.x * f_t.y * f_b.y * f_r.y + f_r.x * f_t.y * f_b.y * f_l.y);
         }
+        let a_out = out_t * out_b * out_l * out_r;
+        let paper = vec3<f32>(params.paper_r, params.paper_g, params.paper_b);
+        let rebate = paper * carrier_tone_at(a_out + lit);
+        let shown = in_t * in_b * in_l * in_r * a_out;
+        color = color * shown + rebate * (1.0 - shown);
     }
 
     textureStore(output_tex, coords, vec4<f32>(clamp(color, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0));

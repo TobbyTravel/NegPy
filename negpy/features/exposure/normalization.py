@@ -204,7 +204,6 @@ def effective_crosstalk_matrix(process: "ProcessConfig", process_mode: Optional[
     Legacy configs carry no `crosstalk_process` and default to C-41, which is what every
     profile that predates the field actually is.
     """
-    from negpy.features.process.models import ProcessMode
 
     profile_mode = str(getattr(process, "crosstalk_process", ProcessMode.C41) or ProcessMode.C41)
     if process_mode is not None and profile_mode != str(process_mode):
@@ -454,7 +453,7 @@ def luminance_density_range(bounds: LogNegativeBounds) -> float:
     per-channel ranges. Replaces the green-only range so frames with a strong
     single-channel cast don't swing the slope as hard, while green still
     dominates so calibrated grade behaviour barely shifts. abs() keeps it
-    sign-safe for E6's reversed (f > c) bounds.
+    sign-safe for a slide's reversed (f > c) window.
     """
     rr = abs(bounds.ceils[0] - bounds.floors[0])
     rg = abs(bounds.ceils[1] - bounds.floors[1])
@@ -544,6 +543,7 @@ def measure_anchor_from_log(
     bounds: LogNegativeBounds,
     roi: Optional[tuple[int, int, int, int]] = None,
     analysis_buffer: float = 0.0,
+    assumed: Optional[float] = None,
 ) -> float:
     """
     Per-frame exposure anchor: where this negative's midtone sits in [0, 1],
@@ -553,11 +553,16 @@ def measure_anchor_from_log(
     detail-bearing span rather than by its median.
 
     Partial metering: the anchor moves only anchor_meter_strength of the way from
-    assumed_anchor toward the metered median, so a deliberately low-key (dark) or
+    `assumed` toward the metered median, so a deliberately low-key (dark) or
     high-key (bright) scene keeps most of its intended key instead of being
     forced to mid-gray, while gross mis-exposure is still pulled toward correct.
     A linear pull (no key-dependent amplification) keeps it predictable. Finally
-    clamped to assumed_anchor +/- anchor_meter_band as a hard safety guard.
+    clamped to `assumed` +/- anchor_meter_band as a hard safety guard.
+
+    `assumed` defaults to EXPOSURE_CONSTANTS["assumed_anchor"], calibrated for the
+    paper path's own per-frame-adaptive bounds. The transfer path's `bounds` are
+    fixed rather than adaptive, so its expected anchor position is a different
+    number (transfer_assumed_anchor) in the same [0, 1] units; pass it explicitly.
     """
     from negpy.features.exposure.models import EXPOSURE_CONSTANTS
 
@@ -573,11 +578,11 @@ def measure_anchor_from_log(
     inner = lum[(lum >= lo) & (lum <= hi)]
     measured = 0.5 * (float(inner.mean()) + 0.5 * (float(lo) + float(hi)))
 
-    assumed = float(EXPOSURE_CONSTANTS["assumed_anchor"])
+    a = float(EXPOSURE_CONSTANTS["assumed_anchor"]) if assumed is None else float(assumed)
     strength = float(EXPOSURE_CONSTANTS["anchor_meter_strength"])
     band = float(EXPOSURE_CONSTANTS["anchor_meter_band"])
-    anchor = assumed + strength * (measured - assumed)
-    return float(min(max(anchor, assumed - band), assumed + band))
+    anchor = a + strength * (measured - a)
+    return float(min(max(anchor, a - band), a + band))
 
 
 def measure_anchor(
@@ -726,8 +731,6 @@ def _sample_log_bounds(
     img_log: np.ndarray,
     percentile_clip: float,
     base: float,
-    process_mode: str,
-    e6_normalize: bool,
     sorted_grid: Optional[np.ndarray] = None,
 ) -> tuple[list, list]:
     """
@@ -744,11 +747,6 @@ def _sample_log_bounds(
         clip = base
         margin = -percentile_clip
     p_low, p_high = np.float64(clip), np.float64(100.0 - clip)
-    fixed_range = 3.0
-
-    if process_mode == ProcessMode.E6:
-        p_low, p_high = p_high, p_low
-        fixed_range = -3.0
 
     def _pct(p) -> list:
         if sorted_grid is not None:
@@ -756,14 +754,10 @@ def _sample_log_bounds(
         return [float(np.percentile(img_log[:, :, ch], p)) for ch in range(3)]
 
     floors = _pct(p_low)
-
-    if process_mode != ProcessMode.E6 or e6_normalize:
-        ceils = _pct(p_high)
-    else:
-        ceils = [floors[ch] + fixed_range for ch in range(3)]
+    ceils = _pct(p_high)
 
     if margin > 0.0:
-        # Expand outward; per-channel sign handles both f < c and f > c (E6).
+        # Expand outward; per-channel sign handles both f < c and f > c.
         for ch in range(3):
             if ceils[ch] >= floors[ch]:
                 floors[ch] -= margin
@@ -849,8 +843,6 @@ def analyze_log_exposure_bounds(
     image: ImageBuffer,
     roi: Optional[tuple[int, int, int, int]] = None,
     analysis_buffer: float = 0.0,
-    process_mode: str = ProcessMode.C41,
-    e6_normalize: bool = True,
     percentile_clip: float = 0.0,
     color_clip: float = 0.0,
     unmix: Optional[np.ndarray] = None,
@@ -875,15 +867,13 @@ def analyze_log_exposure_bounds(
     """
     img_log = to_log_density(image)
     img_log = unmix_log_image(img_log, unmix)
-    return analyze_log_exposure_bounds_from_log(img_log, roi, analysis_buffer, process_mode, e6_normalize, percentile_clip, color_clip)
+    return analyze_log_exposure_bounds_from_log(img_log, roi, analysis_buffer, percentile_clip, color_clip)
 
 
 def analyze_log_exposure_bounds_from_log(
     img_log: ImageBuffer,
     roi: Optional[tuple[int, int, int, int]] = None,
     analysis_buffer: float = 0.0,
-    process_mode: str = ProcessMode.C41,
-    e6_normalize: bool = True,
     percentile_clip: float = 0.0,
     color_clip: float = 0.0,
     sorted_grid: Optional[np.ndarray] = None,
@@ -909,15 +899,15 @@ def analyze_log_exposure_bounds_from_log(
 
     base_luma = float(EXPOSURE_CONSTANTS["base_luma_clip"])
 
-    floors, ceils = _sample_log_bounds(img_log, percentile_clip, base_luma, process_mode, e6_normalize, sorted_grid)
+    floors, ceils = _sample_log_bounds(img_log, percentile_clip, base_luma, sorted_grid)
 
     # Color pass: per-channel deviations recombined onto the luma mean centre and span. The
     # ceils (thin end, base-anchored) come from per-channel percentiles at color_clip. The
     # floors (dense end, scene content) prefer the same-pixel chroma-gated band refs and fall
     # back to the percentile pass when the band holds no trustworthy neutrals, and always for
-    # E-6 and margin-mode clips.
-    c_floors, c_ceils = _sample_log_bounds(img_log, color_clip, 0.0, process_mode, e6_normalize, sorted_grid)
-    if process_mode != ProcessMode.E6 and color_clip >= 0:
+    # margin-mode clips.
+    c_floors, c_ceils = _sample_log_bounds(img_log, color_clip, 0.0, sorted_grid)
+    if color_clip >= 0:
         sp = _same_pixel_color_floor_refs(img_log, floors, ceils, (c_ceils[0], c_ceils[1], c_ceils[2]), color_clip)
         if sp is not None:
             c_floors = [sp[0], sp[1], sp[2]]
@@ -955,6 +945,106 @@ def mix_luma_color_bounds(luma_src: LogNegativeBounds, color_src: LogNegativeBou
         (cf[0] + df, cf[1] + df, cf[2] + df),
         (cc[0] + dc, cc[1] + dc, cc[2] + dc),
     )
+
+
+# Luma-free color distance (log density, 6-D over both bounds) from the pool's median past
+# which a frame is an outlier: shot under a different light, or scanned with a different
+# per-channel balance. Fixed rather than scaled to the pool's spread: a roll that mixes two
+# groups has no single spread to scale by.
+POOL_OUTLIER_DISTANCE = 0.3
+
+
+def pool_frame_bounds(floors: np.ndarray, ceils: np.ndarray) -> tuple[LogNegativeBounds, np.ndarray]:
+    """
+    Pools (N, 3) per-frame bounds into one baseline and an outlier mask. Outliers are whole
+    frames whose luma-free color is far from the median (N >= 3 only). A color offset
+    also shifts luma through G, so the baseline pools the inliers alone: luma is the median
+    of their luma-weighted floor and ceil, color the mean of their luma-free offsets. When
+    every frame is an outlier, all of them pool.
+    """
+    floors = np.asarray(floors, dtype=np.float64)
+    ceils = np.asarray(ceils, dtype=np.float64)
+    w = np.array([LUMA_R, LUMA_G, LUMA_B])
+    luma_f, luma_c = floors @ w, ceils @ w
+    chroma = np.hstack([floors - luma_f[:, None], ceils - luma_c[:, None]])
+
+    outliers = np.zeros(len(chroma), dtype=bool)
+    if len(chroma) >= 3:
+        outliers = np.linalg.norm(chroma - np.median(chroma, axis=0), axis=1) > POOL_OUTLIER_DISTANCE
+    pool = ~outliers if (~outliers).any() else np.ones_like(outliers)
+
+    pooled_chroma = chroma[pool].mean(axis=0)
+    f = float(np.median(luma_f[pool])) + pooled_chroma[:3]
+    c = float(np.median(luma_c[pool])) + pooled_chroma[3:]
+    return LogNegativeBounds((float(f[0]), float(f[1]), float(f[2])), (float(c[0]), float(c[1]), float(c[2]))), outliers
+
+
+def _weighted_median(values: np.ndarray, weights: np.ndarray) -> float:
+    order = np.argsort(values)
+    cum = np.cumsum(weights[order])
+    return float(values[order][np.searchsorted(cum, 0.5 * cum[-1])])
+
+
+def _axis_curve_residuals(axis: tuple, pooled: tuple) -> np.ndarray:
+    """(mid, shadow) x (R, B) distance of *axis* from *pooled*'s R/B-vs-G curve (a quadratic
+    through its bands, a line without a highlight), each read at *axis*'s own green."""
+    bands = [b for b in (pooled[0], pooled[1], pooled[2]) if b is not None]
+    g = np.array([b[1] for b in bands])
+    out = np.zeros((2, 2))
+    for j, ch in enumerate((0, 2)):
+        coef = np.polyfit(g, np.array([b[ch] for b in bands]), len(bands) - 1) if np.ptp(g) > 1e-6 else None
+        for i in (0, 1):
+            ref_g = axis[i][1]
+            fit = float(np.polyval(coef, ref_g)) if coef is not None else bands[0][ch] - bands[0][1] + ref_g
+            out[i, j] = axis[i][ch] - fit
+    return out
+
+
+def pool_neutral_axis(axes: list, outliers: np.ndarray) -> Optional[tuple]:
+    """
+    Pools per-frame neutral axes (measure_neutral_axis_from_log's shape, or None) into one,
+    skipping bounds outliers: a confidence-weighted median per band and channel. The
+    highlight band pools only when at least half the contributing frames have one. None
+    when no inlier frame has an axis with non-zero confidence.
+
+    A fifth element is the offset weight blend_neutral_axis gives a frame's own midtone
+    offset: 1 - noise / spread of the frames' offsets from the pooled curve. The curve's shape
+    is the film's, so the spread of the frames' shapes (shadow minus midtone offset, halved
+    as a difference of two meters) estimates the meter noise. Zero below three frames.
+    """
+    pool = [a for a, out in zip(axes, outliers) if a is not None and not out and a[3] > 0.0]
+    if not pool:
+        return None
+    conf = np.array([a[3] for a in pool])
+
+    def band(i: int, frames: list, w: np.ndarray) -> tuple[float, float, float]:
+        refs = np.array([a[i] for a in frames])
+        return (_weighted_median(refs[:, 0], w), _weighted_median(refs[:, 1], w), _weighted_median(refs[:, 2], w))
+
+    with_hl = [a for a in pool if a[2] is not None]
+    highlight = band(2, with_hl, np.array([a[3] for a in with_hl])) if 2 * len(with_hl) >= len(pool) else None
+    pooled = (band(0, pool, conf), band(1, pool, conf), highlight, float(np.median(conf)))
+
+    weight = 0.0
+    if len(pool) >= 3:
+        res = np.array([_axis_curve_residuals(a, pooled) for a in pool])
+        spread = float(res[:, 0, :].var(axis=0).mean())
+        noise = 0.5 * float((res[:, 1, :] - res[:, 0, :]).var(axis=0).mean())
+        weight = float(np.clip(1.0 - noise / spread, 0.0, 1.0)) if spread > 0.0 else 0.0
+    return (*pooled, weight)
+
+
+def blend_neutral_axis(own: Optional[tuple], pooled: tuple) -> tuple:
+    """The pooled axis shifted by this frame's own midtone offset from the pooled curve, scaled
+    by the pool's offset weight and the frame's confidence: the roll's shape, this frame's
+    level. No own axis, or a zero weight, is the pooled axis itself."""
+    weight = pooled[4] if len(pooled) > 4 else 0.0
+    k = weight * own[3] if own is not None else 0.0
+    if k <= 0.0:
+        return pooled[:4]
+    dr, db = _axis_curve_residuals(own, pooled)[0]
+    shift = lambda b: (b[0] + k * dr, b[1], b[2] + k * db) if b is not None else None  # noqa: E731
+    return (shift(pooled[0]), shift(pooled[1]), shift(pooled[2]), pooled[3])
 
 
 def resolve_bounds(process, analyze_fn) -> LogNegativeBounds:

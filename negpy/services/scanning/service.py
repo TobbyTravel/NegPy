@@ -62,13 +62,13 @@ class ScannerService:
         """
         return self._get_backend().eject(device_id)
 
-    def detect_frames(self, device_id: str, *, film_format: str | None = None, film_type: str = "negative") -> int:
+    def detect_frames(self, device_id: str, *, film_format: str | None = None) -> int:
         """How many frames the loaded film carries, 0 where the transport cannot measure it.
 
         A feeder counts slots instead, and the caller has that from the device capabilities.
         """
         detect = getattr(self._get_backend(), "detect_frames", None)
-        return 0 if detect is None else int(detect(device_id, film_format=film_format, film_type=film_type))
+        return 0 if detect is None else int(detect(device_id, film_format=film_format))
 
     def open_roll(
         self,
@@ -88,6 +88,19 @@ class ScannerService:
         if native is not None:
             return native(device, dpi=dpi, film_format=film_format, film_type=film_type)
         return PerFrameRollSession(backend, device, dpi=dpi)
+
+    def meter(
+        self,
+        device_id: str,
+        params: ScanParams,
+        progress: Callable[[float, str], None],
+        cancel: threading.Event,
+    ) -> dict[str, int]:
+        """Per-channel exposures for `params.frame`, for later scans to reuse. Writes nothing."""
+        meter = getattr(self._get_backend(), "meter", None)
+        if meter is None:
+            raise RuntimeError("This scanner cannot meter a frame on its own")
+        return meter(device_id, params, progress, cancel)
 
     def run_scan(
         self,
@@ -134,12 +147,14 @@ class ScannerService:
         """
         from datetime import date as dt_date
 
-        from negpy.services.scanning.writer import write_dng_linear, write_tiff_16bit
+        from negpy.infrastructure.scanners.settings import MONO_TIFF
+        from negpy.services.scanning.writer import write_tiff_16bit
 
         os.makedirs(output_folder, exist_ok=True)
 
+        fmt = output_format.upper()
         date_str = dt_date.today().strftime("%Y%m%d")
-        ext = ".dng" if output_format.upper() == "DNG" else ".tif"
+        ext = ".tif"
 
         require_sequence_varying_scan_filename(filename_pattern, date_str)
 
@@ -151,9 +166,6 @@ class ScannerService:
                 break
             current += 1
 
-        if output_format.upper() == "DNG":
-            rgb_path = write_dng_linear(result, rgb_path)
-        else:
-            rgb_path = write_tiff_16bit(result, rgb_path)
+        rgb_path = write_tiff_16bit(result, rgb_path, mono=fmt == MONO_TIFF.upper())
 
         return rgb_path
